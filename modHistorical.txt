@@ -35,7 +35,7 @@ Public Sub UpdateHistoricalFiles( _
         Next lngRoot
     End If
 
-    arrUnknownData = FilterUnknownFundTransactions(arrCombined)
+    arrUnknownData = FilterUnknownTransactions(arrCombined)
 
     If UBound(arrUnknownData, 1) > 1 Then
         For lngRoot = 1 To colDestinationRoots.Count
@@ -118,9 +118,14 @@ Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef ar
 
     If Not wkbAlreadyOpen Is Nothing Then
         If wkbAlreadyOpen.ReadOnly Then
+            Call wkbAlreadyOpen.ChangeFileAccess( _
+                xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
+        End If
+        If wkbAlreadyOpen.ReadOnly Then
             Call VBA.Err.Raise( _
                 ERROR_HISTORICAL, METHOD_NAME, _
-                "Historical workbook is already open as read-only: " & strHistoricalPath)
+                "Historical workbook cannot be changed to read/write: " & _
+                strHistoricalPath)
         End If
         If Not wkbAlreadyOpen.Saved Then
             Call VBA.Err.Raise( _
@@ -132,12 +137,14 @@ Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef ar
     ElseIf blnHttpPath Then
         Set wkbHistory = Application.Workbooks.Open( _
             Filename:=strHistoricalPath, UpdateLinks:=0, ReadOnly:=False, _
-            IgnoreReadOnlyRecommended:=True, AddToMru:=False, Notify:=False)
+            IgnoreReadOnlyRecommended:=True, AddToMru:=False, _
+            Notify:=False, WriteResPassword:=OUTPUT_WRITE_PASSWORD)
         blnCloseRequired = True
     ElseIf FileExists(strHistoricalPath) Then
         Set wkbHistory = Application.Workbooks.Open( _
             Filename:=strHistoricalPath, UpdateLinks:=0, ReadOnly:=False, _
-            IgnoreReadOnlyRecommended:=True, AddToMru:=False, Notify:=False)
+            IgnoreReadOnlyRecommended:=True, AddToMru:=False, _
+            Notify:=False, WriteResPassword:=OUTPUT_WRITE_PASSWORD)
         blnCloseRequired = True
     Else
         Set wkbHistory = Application.Workbooks.Add(xlWBATWorksheet)
@@ -167,6 +174,7 @@ Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef ar
     wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
+    wksHistory.Columns("W:W").NumberFormat = "@"
 
     lngExistingLastRow = wksHistory.Cells(wksHistory.Rows.Count, 6).End(xlUp).Row
     If lngExistingLastRow < 1 Then lngExistingLastRow = 1
@@ -219,6 +227,8 @@ Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef ar
                 lngExistingLastRow + lngNewCount, OUTPUT_COLUMN_COUNT)).Value2 = arrNewRows
     End If
 
+    Call ApplyHistoricalHeaderStyle(wksHistory)
+
     If blnNewWorkbook Or lngNewCount > 0 Or blnHeaderUpgraded Then
         lngExistingLastRow = lngExistingLastRow + lngNewCount
         Call AutoFitColumnsWithPadding( _
@@ -228,14 +238,9 @@ Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef ar
             2)
     End If
 
-    If blnNewWorkbook Then
+    If blnNewWorkbook Or lngNewCount > 0 Or blnHeaderUpgraded Then
         Call ApplyWorkbookSensitivityLabel(wkbHistory)
-        Call wkbHistory.SaveAs( _
-            Filename:=strHistoricalPath, FileFormat:=xlOpenXMLWorkbook, _
-            CreateBackup:=False, AddToMru:=False, Local:=True)
-    ElseIf lngNewCount > 0 Or blnHeaderUpgraded Then
-        Call ApplyWorkbookSensitivityLabel(wkbHistory)
-        Call wkbHistory.Save
+        Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
     End If
 
 ExitPoint:
@@ -356,12 +361,15 @@ Private Sub InitializeHistoricalHeader(ByVal wksHistory As Excel.Worksheet)
         wksHistory.Cells(1, lngColumn).Value2 = arrHeaders(lngColumn - 1)
     Next lngColumn
 
-    wksHistory.Rows(1).Font.Bold = True
-    Call wksHistory.Range(wksHistory.Cells(1, 1), wksHistory.Cells(1, OUTPUT_COLUMN_COUNT)).AutoFilter
+    Call ApplyHistoricalHeaderStyle(wksHistory)
+    Call wksHistory.Range( _
+        wksHistory.Cells(1, 1), _
+        wksHistory.Cells(1, OUTPUT_COLUMN_COUNT)).AutoFilter
     wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("R:S").NumberFormat = "#,##0.00"
     wksHistory.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
+    wksHistory.Columns("W:W").NumberFormat = "@"
 
 ExitPoint:
     If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
@@ -410,22 +418,25 @@ Private Sub ValidateHistoricalHeader( _
         End If
     Next lngColumn
 
-    strActual = Trim$(CStr(wksHistory.Cells(1, OUTPUT_TIMESTAMP_COLUMN).Value2))
-    strExpected = CStr(arrHeaders(OUTPUT_TIMESTAMP_COLUMN - 1))
+    For lngColumn = OUTPUT_TIMESTAMP_COLUMN To OUTPUT_USER_ID_COLUMN
+        strActual = Trim$(CStr(wksHistory.Cells(1, lngColumn).Value2))
+        strExpected = CStr(arrHeaders(lngColumn - 1))
 
-    If Len(strActual) = 0 Then
-        wksHistory.Cells(1, OUTPUT_TIMESTAMP_COLUMN).Value2 = strExpected
-        blnHeaderUpgraded = True
-    ElseIf StrComp(strActual, strExpected, vbTextCompare) <> 0 Then
-        Call VBA.Err.Raise( _
-            ERROR_HISTORICAL, METHOD_NAME, _
-            "Historical header mismatch in column " & _
-            CStr(OUTPUT_TIMESTAMP_COLUMN) & ". Expected '" & strExpected & _
-            "' and found '" & strActual & "'.")
-    End If
+        If Len(strActual) = 0 Then
+            wksHistory.Cells(1, lngColumn).Value2 = strExpected
+            blnHeaderUpgraded = True
+        ElseIf StrComp(strActual, strExpected, vbTextCompare) <> 0 Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical header mismatch in column " & CStr(lngColumn) & _
+                ". Expected '" & strExpected & "' and found '" & strActual & "'.")
+        End If
+    Next lngColumn
 
 ExitPoint:
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Sub
 
 ErrHandler:
@@ -437,6 +448,309 @@ ErrHandler:
     GoTo ExitPoint
 End Sub
 
+ '-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    Reviewed transaction, selected Team and enabled roots.
+' Returns:       String
+' Description:   Updates combined and selected-Team masters in all enabled roots.
+'-------------------------------------------------------------------------------
+Public Function AddReviewedTransactionToHistorical( _
+    ByRef arrReviewed As Variant, _
+    ByVal strTeam As String, _
+    ByVal colDestinationRoots As Collection) As String
+
+    Const METHOD_NAME As String = "AddReviewedTransactionToHistorical"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngRoot As Long
+    Dim strCombinedPath As String
+    Dim strResult As String
+    Dim strRootPath As String
+    Dim strTeamFilePart As String
+    Dim strTeamPath As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strTeamFilePart = SanitizeFileNamePart(strTeam)
+
+    For lngRoot = 1 To colDestinationRoots.Count
+        strRootPath = CStr(colDestinationRoots(lngRoot))
+        strCombinedPath = CombinePath(strRootPath, HISTORICAL_COMBINED_FILE)
+        strTeamPath = CombinePath( _
+            strRootPath, HISTORICAL_TEAM_PREFIX & strTeamFilePart & ".xlsx")
+
+        Call UpsertReviewedTransaction(strCombinedPath, arrReviewed)
+        Call UpsertReviewedTransaction(strTeamPath, arrReviewed)
+
+        If Len(strResult) > 0 Then strResult = strResult & vbCrLf
+        strResult = strResult & strRootPath
+    Next lngRoot
+
+ExitPoint:
+    If errNumber = 0 Then AddReviewedTransactionToHistorical = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "team;root", strTeam, strRootPath)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    Historical path and one reviewed transaction array.
+' Returns:       ---
+' Description:   Updates an existing keyed row or appends a manually reviewed row.
+'-------------------------------------------------------------------------------
+Private Sub UpsertReviewedTransaction( _
+    ByVal strHistoricalPath As String, _
+    ByRef arrReviewed As Variant)
+
+    Const METHOD_NAME As String = "UpsertReviewedTransaction"
+    Dim arrExisting As Variant
+    Dim blnCloseRequired As Boolean
+    Dim blnHeaderUpgraded As Boolean
+    Dim blnNewWorkbook As Boolean
+    Dim cleanupErrNumber As Long
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColumn As Long
+    Dim lngExistingLastRow As Long
+    Dim lngRow As Long
+    Dim lngTargetRow As Long
+    Dim strReviewedKey As String
+    Dim wkbAlreadyOpen As Excel.Workbook
+    Dim wkbHistory As Excel.Workbook
+    Dim wksHistory As Excel.Worksheet
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strHistoricalPath, False)
+
+    If Not wkbAlreadyOpen Is Nothing Then
+        If wkbAlreadyOpen.ReadOnly Then
+            Call wkbAlreadyOpen.ChangeFileAccess( _
+                xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
+        End If
+
+        If wkbAlreadyOpen.ReadOnly Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical workbook cannot be changed to read/write: " & _
+                strHistoricalPath)
+        End If
+
+        If Not wkbAlreadyOpen.Saved Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical workbook has unsaved user changes: " & _
+                strHistoricalPath)
+        End If
+
+        Set wkbHistory = wkbAlreadyOpen
+    ElseIf FileExists(strHistoricalPath) Or IsHttpPath(strHistoricalPath) Then
+        Set wkbHistory = Application.Workbooks.Open( _
+            Filename:=strHistoricalPath, UpdateLinks:=0, ReadOnly:=False, _
+            IgnoreReadOnlyRecommended:=True, AddToMru:=False, _
+            Notify:=False, WriteResPassword:=OUTPUT_WRITE_PASSWORD)
+        blnCloseRequired = True
+    Else
+        Set wkbHistory = Application.Workbooks.Add(xlWBATWorksheet)
+        blnCloseRequired = True
+        blnNewWorkbook = True
+    End If
+
+    If wkbHistory Is Nothing Or wkbHistory.ReadOnly Then
+        Call VBA.Err.Raise( _
+            ERROR_HISTORICAL, METHOD_NAME, _
+            "Historical workbook is not available for update: " & _
+            strHistoricalPath)
+    End If
+
+    Set wksHistory = GetHistoricalWorksheet(wkbHistory, blnNewWorkbook)
+
+    If blnNewWorkbook Then
+        Call InitializeHistoricalHeader(wksHistory)
+    Else
+        Call ValidateHistoricalHeader( _
+            wksHistory, strHistoricalPath, blnHeaderUpgraded)
+    End If
+
+    lngExistingLastRow = wksHistory.Cells(wksHistory.Rows.Count, 6).End(xlUp).Row
+    If lngExistingLastRow < 1 Then lngExistingLastRow = 1
+    strReviewedKey = BuildTransactionKey(arrReviewed, 2)
+
+    If lngExistingLastRow >= 2 Then
+        arrExisting = wksHistory.Range( _
+            wksHistory.Cells(1, 1), _
+            wksHistory.Cells(lngExistingLastRow, OUTPUT_COLUMN_COUNT)).Value2
+
+        For lngRow = 2 To UBound(arrExisting, 1)
+            If StrComp( _
+                BuildTransactionKey(arrExisting, lngRow), _
+                strReviewedKey, vbBinaryCompare) = 0 Then
+
+                lngTargetRow = lngRow
+                Exit For
+            End If
+        Next lngRow
+    End If
+
+    If lngTargetRow = 0 Then
+        lngTargetRow = lngExistingLastRow + 1
+    End If
+
+    For lngColumn = 1 To OUTPUT_COLUMN_COUNT
+        wksHistory.Cells(lngTargetRow, lngColumn).Value2 = _
+            arrReviewed(2, lngColumn)
+    Next lngColumn
+
+    With wksHistory.Range( _
+        wksHistory.Cells(lngTargetRow, 1), _
+        wksHistory.Cells(lngTargetRow, OUTPUT_COLUMN_COUNT))
+
+        .Interior.Color = MANUAL_REVIEW_FILL_COLOR
+        .Font.Name = OUTPUT_HEADER_FONT_NAME
+        .Font.Size = OUTPUT_HEADER_FONT_SIZE
+    End With
+
+    wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
+    wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
+    wksHistory.Columns("R:S").NumberFormat = "#,##0.00"
+    wksHistory.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
+    wksHistory.Columns("W:W").NumberFormat = "@"
+    Call ApplyHistoricalHeaderStyle(wksHistory)
+    Call AutoFitColumnsWithPadding( _
+        wksHistory.Range( _
+            wksHistory.Cells(1, 1), _
+            wksHistory.Cells(lngTargetRow, OUTPUT_COLUMN_COUNT)).Columns, _
+        2)
+
+    Call ApplyWorkbookSensitivityLabel(wkbHistory)
+    Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
+
+ExitPoint:
+    Set wksHistory = Nothing
+    Set wkbAlreadyOpen = Nothing
+
+    If blnCloseRequired Then
+        blnCloseRequired = False
+        cleanupErrNumber = CloseWorkbookSafely(wkbHistory, False)
+
+        If errNumber = 0 And cleanupErrNumber <> 0 Then
+            errNumber = cleanupErrNumber
+            errDescription = _
+                "The reviewed historical workbook could not be closed."
+        End If
+    End If
+
+    Set wkbHistory = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "historicalPath", strHistoricalPath)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    wksHistory As Excel.Worksheet
+' Returns:       ---
+' Description:   Applies the standard output header style to a historical sheet.
+'-------------------------------------------------------------------------------
+Private Sub ApplyHistoricalHeaderStyle(ByVal wksHistory As Excel.Worksheet)
+    Const METHOD_NAME As String = "ApplyHistoricalHeaderStyle"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim rngHeader As Excel.Range
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set rngHeader = wksHistory.Range( _
+        wksHistory.Cells(1, 1), _
+        wksHistory.Cells(1, OUTPUT_COLUMN_COUNT))
+
+    With rngHeader
+        .Font.Bold = True
+        .Font.Name = OUTPUT_HEADER_FONT_NAME
+        .Font.Size = OUTPUT_HEADER_FONT_SIZE
+        .Font.Color = OUTPUT_HEADER_FONT_COLOR
+        .Interior.Color = OUTPUT_HEADER_FILL_COLOR
+        .WrapText = True
+    End With
+
+ExitPoint:
+    Set rngHeader = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    Workbook and target historical path.
+' Returns:       ---
+' Description:   Saves a historical workbook with write-reservation protection.
+'-------------------------------------------------------------------------------
+Private Sub SaveHistoricalWorkbookProtected( _
+    ByVal wkbHistory As Excel.Workbook, _
+    ByVal strHistoricalPath As String)
+
+    Const METHOD_NAME As String = "SaveHistoricalWorkbookProtected"
+    Dim blnPreviousDisplayAlerts As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    blnPreviousDisplayAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+
+    Call wkbHistory.SaveAs( _
+        Filename:=strHistoricalPath, FileFormat:=xlOpenXMLWorkbook, _
+        WriteResPassword:=OUTPUT_WRITE_PASSWORD, _
+        ReadOnlyRecommended:=True, CreateBackup:=False, _
+        AddToMru:=False, Local:=True)
+
+ExitPoint:
+    Application.DisplayAlerts = blnPreviousDisplayAlerts
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "historicalPath", strHistoricalPath)
+    GoTo ExitPoint
+End Sub
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
@@ -478,4 +792,5 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "padding", dblPadding)
     GoTo ExitPoint
 End Sub
+
 
