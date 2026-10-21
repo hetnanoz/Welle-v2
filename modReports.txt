@@ -177,15 +177,17 @@ Public Sub CreateDailyReports( _
     strTimeToken = Format$(dtRunTimestamp, "hhnnss")
 
     strFileName = REPORT_COMBINED_PREFIX & strDateToken & "_" & strTimeToken & ".xlsx"
-    Call PublishReport(arrCombined, strFileName, colDestinationRoots, DateValue(dtRunTimestamp), strWorkspace)
+    Call PublishReport( _
+        arrCombined, strFileName, colDestinationRoots, _
+        DateValue(dtRunTimestamp), strWorkspace, False)
 
-    arrUnknownData = FilterUnknownFundTransactions(arrCombined)
+    arrUnknownData = FilterUnknownTransactions(arrCombined)
 
     If UBound(arrUnknownData, 1) > 1 Then
         strFileName = REPORT_UNKNOWN_PREFIX & strDateToken & "_" & strTimeToken & ".xlsx"
         Call PublishReport( _
             arrUnknownData, strFileName, colDestinationRoots, _
-            DateValue(dtRunTimestamp), strWorkspace)
+            DateValue(dtRunTimestamp), strWorkspace, True)
     End If
 
     arrUnknownData = Empty
@@ -203,7 +205,7 @@ Public Sub CreateDailyReports( _
 
             Call PublishReport( _
                 arrTeamData, strFileName, colDestinationRoots, _
-                DateValue(dtRunTimestamp), strWorkspace)
+                DateValue(dtRunTimestamp), strWorkspace, False)
         End If
 
         arrTeamData = Empty
@@ -234,7 +236,8 @@ Private Sub PublishReport( _
     ByVal strFileName As String, _
     ByVal colDestinationRoots As Collection, _
     ByVal dtReportDate As Date, _
-    ByVal strWorkspace As String)
+    ByVal strWorkspace As String, _
+    ByVal blnUnknownReport As Boolean)
     Const METHOD_NAME As String = "PublishReport"
     Dim errDescription As String
     Dim errNumber As Long
@@ -246,7 +249,7 @@ Private Sub PublishReport( _
 
     strStagePath = CombinePath(strWorkspace, strFileName)
     Call DeleteFileIfExists(strStagePath)
-    Call CreateReportWorkbook(arrReport, strStagePath)
+    Call CreateReportWorkbook(arrReport, strStagePath, blnUnknownReport)
 
     For lngRoot = 1 To colDestinationRoots.Count
         strDailyFolder = BuildDatedFolderPath(CStr(colDestinationRoots(lngRoot)), dtReportDate)
@@ -276,7 +279,10 @@ End Sub
 ' Returns:       ---
 ' Description:   Creates an XLSX report with a hidden Static_Data worksheet.
 '-------------------------------------------------------------------------------
-Private Sub CreateReportWorkbook(ByRef arrReport As Variant, ByVal strStagePath As String)
+Private Sub CreateReportWorkbook( _
+    ByRef arrReport As Variant, _
+    ByVal strStagePath As String, _
+    ByVal blnUnknownReport As Boolean)
     Const METHOD_NAME As String = "CreateReportWorkbook"
     Dim blnCloseRequired As Boolean
     Dim cleanupErrNumber As Long
@@ -301,12 +307,19 @@ Private Sub CreateReportWorkbook(ByRef arrReport As Variant, ByVal strStagePath 
         wksTransactions.Cells(lngLastRow, OUTPUT_COLUMN_COUNT)).Value2 = arrReport
 
     Call FormatTransactionWorksheet(wksTransactions, lngLastRow)
+
+    If blnUnknownReport Then
+        Call AddUnknownActionButtons(wksTransactions, lngLastRow)
+    End If
+
     Call CopyStaticDataValues(wkbOutput)
     Call ApplyWorkbookSensitivityLabel(wkbOutput)
 
     Call wkbOutput.SaveAs( _
         Filename:=strStagePath, FileFormat:=xlOpenXMLWorkbook, _
-        CreateBackup:=False, AddToMru:=False, Local:=True)
+        WriteResPassword:=OUTPUT_WRITE_PASSWORD, _
+        ReadOnlyRecommended:=True, CreateBackup:=False, _
+        AddToMru:=False, Local:=True)
 
 ExitPoint:
     Set wksTransactions = Nothing
@@ -412,14 +425,25 @@ Private Sub FormatTransactionWorksheet(ByVal wksTransactions As Excel.Worksheet,
         wksTransactions.Cells(1, 1), _
         wksTransactions.Cells(lngLastRow, OUTPUT_COLUMN_COUNT))
 
-    wksTransactions.Rows(1).Font.Bold = True
-    wksTransactions.Rows(1).WrapText = True
+    With wksTransactions.Range( _
+        wksTransactions.Cells(1, 1), _
+        wksTransactions.Cells(1, OUTPUT_COLUMN_COUNT))
+
+        .Font.Bold = True
+        .Font.Name = OUTPUT_HEADER_FONT_NAME
+        .Font.Size = OUTPUT_HEADER_FONT_SIZE
+        .Font.Color = OUTPUT_HEADER_FONT_COLOR
+        .Interior.Color = OUTPUT_HEADER_FILL_COLOR
+        .WrapText = True
+    End With
+
     Call rngTable.AutoFilter
 
     wksTransactions.Columns("C:D").NumberFormat = "dd.mm.yyyy"
     wksTransactions.Columns("H:I").NumberFormat = "dd.mm.yyyy"
     wksTransactions.Columns("R:S").NumberFormat = "#,##0.00"
     wksTransactions.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
+    wksTransactions.Columns("W:W").NumberFormat = "@"
     Call AutoFitColumnsWithPadding(rngTable.Columns, 2)
 
 ExitPoint:
@@ -475,4 +499,5 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "padding", dblPadding)
     GoTo ExitPoint
 End Sub
+
 
