@@ -7,6 +7,7 @@ Public Const DEV_MODE As Boolean = False
 Public Const SHEET_MAPPING As String = "Mapping"
 Public Const SHEET_STATIC_DATA As String = "Static_Data"
 Public Const SHEET_TRANSACTIONS As String = "Transactions"
+Public Const SHEET_UNKNOWN_REVIEW As String = "Unknown_Review"
 
 Public Const NAME_FLAG_SAVE_LOCAL As String = "FLAG_SAVE_LOCAL"
 Public Const NAME_FLAG_SAVE_SHAREPOINT As String = "FLAG_SAVE_SHAREPOINT"
@@ -35,9 +36,18 @@ Public Const NAME_MAIL_SHAREPOINT_URL As String = "MAIL_SHAREPOINT_URL"
 
 
 Public Const INPUT_COLUMN_COUNT As Long = 16
-Public Const OUTPUT_COLUMN_COUNT As Long = 22
+Public Const OUTPUT_COLUMN_COUNT As Long = 23
 Public Const OUTPUT_TIMESTAMP_COLUMN As Long = 22
+Public Const OUTPUT_USER_ID_COLUMN As Long = 23
+Public Const UNKNOWN_REVIEW_ACTION_COLUMN As Long = 24
 Public Const OUTPUT_TIMESTAMP_NUMBER_FORMAT As String = "ddmmyyyyhhmm"
+Public Const OUTPUT_WRITE_PASSWORD As String = "bnpp"
+Public Const OUTPUT_HEADER_FONT_NAME As String = "Aptos Narrow"
+Public Const OUTPUT_HEADER_FONT_SIZE As Double = 11
+Public Const OUTPUT_HEADER_FILL_COLOR As Long = &HFF
+Public Const OUTPUT_HEADER_FONT_COLOR As Long = &HFFFFFF
+Public Const MANUAL_REVIEW_FILL_COLOR As Long = &HFAE6E6
+Public Const UNKNOWN_REVIEW_BUTTON_PREFIX As String = "btnUnknownAdd_"
 Public Const INPUT_HEADER_ROW As Long = 1
 Public Const INPUT_FIRST_DATA_ROW As Long = 2
 Public Const STATIC_DATA_FIRST_DATA_ROW As Long = 2
@@ -61,4 +71,5 @@ Public Const ERROR_OUTPUT As Long = 1601
 Public Const ERROR_HISTORICAL As Long = 1701
 Public Const ERROR_FILE_SYSTEM As Long = 1801
 Public Const ERROR_EMAIL As Long = 1901
+
 
