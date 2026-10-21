@@ -7,7 +7,7 @@ Private Const CLASS_NAME As String = "modTransactionData"
 ' Creation date: 2026-08-26
 ' Parameters:    ---
 ' Returns:       Variant
-' Description:   Returns the canonical A:V output headers.
+' Description:   Returns the canonical A:W output headers.
 '-------------------------------------------------------------------------------
 Public Function GetOutputHeaders() As Variant
     Const METHOD_NAME As String = "GetOutputHeaders"
@@ -21,7 +21,7 @@ Public Function GetOutputHeaders() As Variant
         "MF", "Master", "VD", "TD", "Team", "Account", "Account Name", _
         "v/d", "t/d", "Journal", "BLZ", "Ref. 1", "Ref. 2", "Ref. 3", _
         "Ref. 4", "Ref. 5", "Ref. 6", "EUR amount", "Amount", "CCY", _
-        "Reversal", "Added Timestamp")
+        "Reversal", "Added Timestamp", "USER ID")
 
 ExitPoint:
     If errNumber = 0 Then GetOutputHeaders = arrResult
@@ -125,15 +125,15 @@ ErrHandler:
     GoTo ExitPoint
 End Function
 
-'-------------------------------------------------------------------------------
+ '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
-' Creation date: 2026-08-27
+' Creation date: 2026-10-21
 ' Parameters:    arrData As Variant
 ' Returns:       Variant
-' Description:   Returns the header and transactions for which no fund was found.
+' Description:   Returns rows with an unknown fund or unknown Team.
 '-------------------------------------------------------------------------------
-Public Function FilterUnknownFundTransactions(ByRef arrData As Variant) As Variant
-    Const METHOD_NAME As String = "FilterUnknownFundTransactions"
+Public Function FilterUnknownTransactions(ByRef arrData As Variant) As Variant
+    Const METHOD_NAME As String = "FilterUnknownTransactions"
     Dim arrResult As Variant
     Dim errDescription As String
     Dim errNumber As Long
@@ -141,13 +141,13 @@ Public Function FilterUnknownFundTransactions(ByRef arrData As Variant) As Varia
     Dim lngMatchCount As Long
     Dim lngOutputRow As Long
     Dim lngRow As Long
-    Dim strFund As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     For lngRow = 2 To UBound(arrData, 1)
-        strFund = Trim$(CStr(arrData(lngRow, 1)))
-        If StrComp(strFund, "UNKNOWN FUND", vbTextCompare) = 0 Then lngMatchCount = lngMatchCount + 1
+        If IsUnknownTransactionRow(arrData, lngRow) Then
+            lngMatchCount = lngMatchCount + 1
+        End If
     Next lngRow
 
     ReDim arrResult(1 To lngMatchCount + 1, 1 To OUTPUT_COLUMN_COUNT)
@@ -159,9 +159,7 @@ Public Function FilterUnknownFundTransactions(ByRef arrData As Variant) As Varia
     lngOutputRow = 1
 
     For lngRow = 2 To UBound(arrData, 1)
-        strFund = Trim$(CStr(arrData(lngRow, 1)))
-
-        If StrComp(strFund, "UNKNOWN FUND", vbTextCompare) = 0 Then
+        If IsUnknownTransactionRow(arrData, lngRow) Then
             lngOutputRow = lngOutputRow + 1
 
             For lngColumn = 1 To OUTPUT_COLUMN_COUNT
@@ -171,8 +169,10 @@ Public Function FilterUnknownFundTransactions(ByRef arrData As Variant) As Varia
     Next lngRow
 
 ExitPoint:
-    If errNumber = 0 Then FilterUnknownFundTransactions = arrResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber = 0 Then FilterUnknownTransactions = arrResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -186,32 +186,31 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
-' Creation date: 2026-09-01
+' Creation date: 2026-10-21
 ' Parameters:    arrData As Variant
 ' Returns:       Long
-' Description:   Counts transactions for which no fund was found.
+' Description:   Counts rows with an unknown fund or unknown Team.
 '-------------------------------------------------------------------------------
-Public Function CountUnknownFundTransactions(ByRef arrData As Variant) As Long
-    Const METHOD_NAME As String = "CountUnknownFundTransactions"
+Public Function CountUnknownTransactions(ByRef arrData As Variant) As Long
+    Const METHOD_NAME As String = "CountUnknownTransactions"
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngCount As Long
     Dim lngRow As Long
-    Dim strFund As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     For lngRow = 2 To UBound(arrData, 1)
-        strFund = Trim$(CStr(arrData(lngRow, 1)))
-
-        If StrComp(strFund, "UNKNOWN FUND", vbTextCompare) = 0 Then
+        If IsUnknownTransactionRow(arrData, lngRow) Then
             lngCount = lngCount + 1
         End If
     Next lngRow
 
 ExitPoint:
-    If errNumber = 0 Then CountUnknownFundTransactions = lngCount
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber = 0 Then CountUnknownTransactions = lngCount
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -220,6 +219,83 @@ ErrHandler:
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
         "row", lngRow)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    arrData As Variant; lngRow As Long
+' Returns:       Boolean
+' Description:   Identifies an unknown-fund or unknown-Team transaction row.
+'-------------------------------------------------------------------------------
+Public Function IsUnknownTransactionRow( _
+    ByRef arrData As Variant, _
+    ByVal lngRow As Long) As Boolean
+
+    Const METHOD_NAME As String = "IsUnknownTransactionRow"
+    Dim blnResult As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strFund As String
+    Dim strTeam As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strFund = Trim$(CStr(arrData(lngRow, 1)))
+    strTeam = Trim$(CStr(arrData(lngRow, 5)))
+
+    blnResult = _
+        StrComp(strFund, "UNKNOWN FUND", vbTextCompare) = 0 Or _
+        Len(strTeam) = 0 Or _
+        StrComp(strTeam, "UNKNOWN TEAM", vbTextCompare) = 0
+
+ExitPoint:
+    If errNumber = 0 Then IsUnknownTransactionRow = blnResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "row", lngRow)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    ---
+' Returns:       String
+' Description:   Returns the current Windows user ID with an Excel fallback.
+'-------------------------------------------------------------------------------
+Public Function GetCurrentUserId() As String
+    Const METHOD_NAME As String = "GetCurrentUserId"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strResult = Trim$(Environ$("USERNAME"))
+    If Len(strResult) = 0 Then strResult = Trim$(Application.UserName)
+    If Len(strResult) = 0 Then strResult = "UNKNOWN USER"
+
+ExitPoint:
+    If errNumber = 0 Then GetCurrentUserId = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Function
 
@@ -502,3 +578,4 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Function
+
