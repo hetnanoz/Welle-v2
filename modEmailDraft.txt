@@ -221,7 +221,7 @@ Private Function BuildEmailBodyHtml( _
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     lngTransactionCount = UBound(arrCombined, 1) - 1
-    lngUnknownCount = CountUnknownFundTransactions(arrCombined)
+    lngUnknownCount = CountUnknownTransactions(arrCombined)
     strUnknownStatus = BuildUnknownStatus(lngUnknownCount)
 
     If Len(strTeamList) > 0 Then
