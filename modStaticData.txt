@@ -128,7 +128,7 @@ Public Function BuildAccountMappingDictionary() As Object
 
         If Len(strIdentifier) > 0 Then
             strFund = GetTextValue(arrData(lngRow, 2))
-            strMaster = GetTextValue(arrData(lngRow, 3))
+            strMaster = GetOptionalMasterValue(arrData(lngRow, 3))
             strTeam = GetTextValue(arrData(lngRow, 6))
             dictAccounts(strIdentifier) = Array(strFund, strMaster, strTeam)
         End If
@@ -166,6 +166,7 @@ Public Sub EnrichTransactions(ByRef arrCombined As Variant, ByVal dictAccounts A
     Dim strFund As String
     Dim strMaster As String
     Dim strTeam As String
+    Dim strUserId As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
@@ -176,6 +177,7 @@ Public Sub EnrichTransactions(ByRef arrCombined As Variant, ByVal dictAccounts A
     End If
 
     dtAddedTimestamp = Now
+    strUserId = GetCurrentUserId()
 
     For lngRow = 2 To UBound(arrCombined, 1)
         strAccount = NormalizeLookupKey(arrCombined(lngRow, 6))
@@ -201,6 +203,7 @@ Public Sub EnrichTransactions(ByRef arrCombined As Variant, ByVal dictAccounts A
         arrCombined(lngRow, 3) = arrCombined(lngRow, 8)
         arrCombined(lngRow, 4) = arrCombined(lngRow, 9)
         arrCombined(lngRow, OUTPUT_TIMESTAMP_COLUMN) = dtAddedTimestamp
+        arrCombined(lngRow, OUTPUT_USER_ID_COLUMN) = strUserId
     Next lngRow
 
 ExitPoint:
@@ -291,6 +294,41 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
+' Creation date: 2026-10-21
+' Parameters:    varValue As Variant
+' Returns:       String
+' Description:   Returns blank for an optional Master error or missing value.
+'-------------------------------------------------------------------------------
+Private Function GetOptionalMasterValue(ByVal varValue As Variant) As String
+    Const METHOD_NAME As String = "GetOptionalMasterValue"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If IsError(varValue) Or IsNull(varValue) Or IsEmpty(varValue) Then
+        strResult = vbNullString
+    Else
+        strResult = Trim$(CStr(varValue))
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then GetOptionalMasterValue = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
 ' Parameters:    varValue As Variant
 ' Returns:       String
@@ -327,4 +365,5 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Function
+
 
