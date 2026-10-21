@@ -1,0 +1,708 @@
+Option Explicit
+
+Private Const CLASS_NAME As String = "modOutlook"
+Private Const OL_FOLDER_INBOX As Long = 6
+Private Const OL_MAIL_ITEM_CLASS As Long = 43
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-08-27
+' Parameters:    Configuration, workspace and output dictionaries.
+' Returns:       Collection
+' Description:   Saves matching Excel attachments without moving source Outlook messages.
+'-------------------------------------------------------------------------------
+Public Function DownloadCashTransactionAttachments( _
+    ByRef appConfig As TAppConfig, _
+    ByVal strWorkspace As String, _
+    ByRef dictAttachmentSubjects As Object, _
+    ByRef dictProcessedMailSubjects As Object) As Collection
+    Const METHOD_NAME As String = "DownloadCashTransactionAttachments"
+    Dim colAttachmentPaths As Collection
+    Dim blnSenderMatches As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngAttachment As Long
+    Dim lngItem As Long
+    Dim lngSavedForMail As Long
+    Dim objAttachment As Object
+    Dim objItem As Object
+    Dim objItems As Object
+    Dim objMail As Object
+    Dim objNamespace As Object
+    Dim objOutlook As Object
+    Dim objRestrictedItems As Object
+    Dim objRootFolder As Object
+    Dim objSourceFolder As Object
+    Dim strAttachmentFileName As String
+    Dim strCurrentMailSubject As String
+    Dim strCurrentSenderEmail As String
+    Dim strExtension As String
+    Dim strFilter As String
+    Dim strSafeFileName As String
+    Dim strSourceFolderEntryId As String
+    Dim strSourceStoreId As String
+    Dim strTargetPath As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set colAttachmentPaths = New Collection
+    Set dictAttachmentSubjects = CreateObject("Scripting.Dictionary")
+    dictAttachmentSubjects.CompareMode = vbTextCompare
+    Set dictProcessedMailSubjects = CreateObject("Scripting.Dictionary")
+    dictProcessedMailSubjects.CompareMode = vbBinaryCompare
+    Set objOutlook = CreateObject("Outlook.Application")
+    Set objNamespace = objOutlook.GetNamespace("MAPI")
+    Set objRootFolder = GetMailboxRootFolder(objNamespace, appConfig.OutlookMailbox)
+    Set objSourceFolder = GetFolderByPath(objRootFolder, appConfig.OutlookSourceFolder)
+    strSourceStoreId = CStr(objSourceFolder.StoreID)
+    strSourceFolderEntryId = CStr(objSourceFolder.EntryID)
+
+    Set objItems = objSourceFolder.Items
+    strFilter = BuildSubjectFilter(appConfig.OutlookSubjectPrefix)
+    Set objRestrictedItems = objItems.Restrict(strFilter)
+    For lngItem = objRestrictedItems.Count To 1 Step -1
+        Set objItem = objRestrictedItems.Item(lngItem)
+
+        If CLng(objItem.Class) = OL_MAIL_ITEM_CLASS Then
+            Set objMail = objItem
+            strCurrentMailSubject = CStr(objMail.Subject)
+
+            If SubjectContainsConfiguredPhrase(strCurrentMailSubject, appConfig.OutlookSubjectPrefix) Then
+                blnSenderMatches = True
+                strCurrentSenderEmail = vbNullString
+
+                If Len(Trim$(appConfig.OutlookSenderEmail)) > 0 Then
+                    strCurrentSenderEmail = GetSenderSmtpAddress(objMail)
+                    blnSenderMatches = ValueMatchesAnyExactOption( _
+                        strCurrentSenderEmail, appConfig.OutlookSenderEmail)
+                End If
+
+                If blnSenderMatches Then
+                    lngSavedForMail = 0
+
+                    For lngAttachment = 1 To objMail.Attachments.Count
+                        Set objAttachment = objMail.Attachments.Item(lngAttachment)
+                        strAttachmentFileName = CStr(objAttachment.FileName)
+                        strExtension = GetFileExtension(strAttachmentFileName)
+
+                        If ValueStartsWithAnyOption( _
+                            strAttachmentFileName, _
+                            appConfig.OutlookAttachmentPrefix) Then
+                            If strExtension = ".xlsx" Or strExtension = ".xls" Then
+                                strSafeFileName = _
+                                    Format$( _
+                                        CDate(objMail.ReceivedTime), _
+                                        "yyyymmdd_hhnnss") & "_" & _
+                                    Format$(lngItem, "0000") & "_" & _
+                                    Format$(lngAttachment, "00") & "_" & _
+                                    SanitizeFileNamePart(strAttachmentFileName)
+                                strTargetPath = CombinePath(strWorkspace, strSafeFileName)
+                                Call objAttachment.SaveAsFile(strTargetPath)
+                                colAttachmentPaths.Add strTargetPath
+                                dictAttachmentSubjects(strTargetPath) = strCurrentMailSubject
+                                lngSavedForMail = lngSavedForMail + 1
+                            End If
+                        End If
+
+                        Set objAttachment = Nothing
+                    Next lngAttachment
+
+                    If lngSavedForMail > 0 Then
+                        dictProcessedMailSubjects(CStr(objMail.EntryID)) = _
+                            Array( _
+                                strCurrentMailSubject, strSourceStoreId, _
+                                strSourceFolderEntryId)
+                    End If
+                End If
+            End If
+        End If
+
+        Set objMail = Nothing
+        Set objItem = Nothing
+    Next lngItem
+
+    If colAttachmentPaths.Count = 0 Then
+        If Len(Trim$(appConfig.OutlookSenderEmail)) > 0 Then
+            Call VBA.Err.Raise( _
+                ERROR_OUTLOOK, METHOD_NAME, _
+                "No .xlsx or .xls attachments matching the configured attachment " & _
+                "prefix were found in Outlook messages matching the configured " & _
+                "subject phrase and sender filter.")
+        Else
+            Call VBA.Err.Raise( _
+                ERROR_OUTLOOK, METHOD_NAME, _
+                "No .xlsx or .xls attachments matching the configured attachment " & _
+                "prefix were found in matching Outlook messages.")
+        End If
+    End If
+
+ExitPoint:
+    Set objAttachment = Nothing
+    Set objMail = Nothing
+    Set objItem = Nothing
+    Set objRestrictedItems = Nothing
+    Set objItems = Nothing
+    Set objSourceFolder = Nothing
+    Set objRootFolder = Nothing
+    Set objNamespace = Nothing
+    Set objOutlook = Nothing
+
+    If errNumber = 0 Then Set DownloadCashTransactionAttachments = colAttachmentPaths
+    Set colAttachmentPaths = Nothing
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "sourceFolder;workspace", appConfig.OutlookSourceFolder, strWorkspace)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-08-27
+' Parameters:    appConfig As TAppConfig; dictProcessedMailSubjects As Object
+' Returns:       ---
+' Description:   Moves processed Outlook messages to Archive after the full run succeeds.
+'-------------------------------------------------------------------------------
+Public Sub ArchiveProcessedOutlookMessages( _
+    ByRef appConfig As TAppConfig, _
+    ByVal dictProcessedMailSubjects As Object)
+
+    Const METHOD_NAME As String = "ArchiveProcessedOutlookMessages"
+    Dim arrEntryIds As Variant
+    Dim arrMailInfo As Variant
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngItem As Long
+    Dim objArchiveFolder As Object
+    Dim objItem As Object
+    Dim objMovedMail As Object
+    Dim objNamespace As Object
+    Dim objOutlook As Object
+    Dim objRootFolder As Object
+    Dim strCurrentEntryId As String
+    Dim strSourceFolderEntryId As String
+    Dim strSourceStoreId As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If Not dictProcessedMailSubjects Is Nothing Then
+        If dictProcessedMailSubjects.Count > 0 Then
+            Set objOutlook = CreateObject("Outlook.Application")
+            Set objNamespace = objOutlook.GetNamespace("MAPI")
+            Set objRootFolder = GetMailboxRootFolder(objNamespace, appConfig.OutlookMailbox)
+            Set objArchiveFolder = GetFolderByPath( _
+                objRootFolder, appConfig.OutlookArchiveFolder)
+            arrEntryIds = dictProcessedMailSubjects.Keys
+
+            For lngItem = LBound(arrEntryIds) To UBound(arrEntryIds)
+                strCurrentEntryId = CStr(arrEntryIds(lngItem))
+                arrMailInfo = dictProcessedMailSubjects(strCurrentEntryId)
+                strSourceStoreId = CStr(arrMailInfo(1))
+                strSourceFolderEntryId = CStr(arrMailInfo(2))
+
+                If StrComp( _
+                    strSourceFolderEntryId, CStr(objArchiveFolder.EntryID), _
+                    vbBinaryCompare) = 0 Then
+                    Call VBA.Err.Raise( _
+                        ERROR_OUTLOOK, METHOD_NAME, _
+                        "Outlook source and archive folders resolve to the same folder.")
+                End If
+
+                Set objItem = objNamespace.GetItemFromID( _
+                    strCurrentEntryId, strSourceStoreId)
+
+                If objItem Is Nothing Then
+                    Call VBA.Err.Raise( _
+                        ERROR_OUTLOOK, METHOD_NAME, _
+                        "A processed Outlook message could not be reopened for archiving.")
+                End If
+
+                If CLng(objItem.Class) <> OL_MAIL_ITEM_CLASS Then
+                    Call VBA.Err.Raise( _
+                        ERROR_OUTLOOK, METHOD_NAME, _
+                        "A processed Outlook item is no longer a mail item.")
+                End If
+
+                Set objMovedMail = objItem.Move(objArchiveFolder)
+                Set objMovedMail = Nothing
+                Set objItem = Nothing
+            Next lngItem
+        End If
+    End If
+
+ExitPoint:
+    Set objMovedMail = Nothing
+    Set objItem = Nothing
+    Set objArchiveFolder = Nothing
+    Set objRootFolder = Nothing
+    Set objNamespace = Nothing
+    Set objOutlook = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "sourceFolder;archiveFolder;itemIndex", _
+        appConfig.OutlookSourceFolder, appConfig.OutlookArchiveFolder, lngItem)
+    GoTo ExitPoint
+End Sub
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-08-26
+' Parameters:    objNamespace As Object; strMailbox As String
+' Returns:       Object
+' Description:   Resolves a shared mailbox root by store name or recipient.
+'-------------------------------------------------------------------------------
+Private Function GetMailboxRootFolder(ByVal objNamespace As Object, ByVal strMailbox As String) As Object
+    Const METHOD_NAME As String = "GetMailboxRootFolder"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objCandidateFolder As Object
+    Dim objInbox As Object
+    Dim objRecipient As Object
+    Dim objResult As Object
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each objCandidateFolder In objNamespace.Folders
+        If StrComp(Trim$(CStr(objCandidateFolder.Name)), Trim$(strMailbox), vbTextCompare) = 0 Then
+            Set objResult = objCandidateFolder
+            Exit For
+        End If
+    Next objCandidateFolder
+
+    If objResult Is Nothing Then
+        Set objRecipient = objNamespace.CreateRecipient(strMailbox)
+
+        If Not CBool(objRecipient.Resolve) Then
+            Call VBA.Err.Raise( _
+                ERROR_OUTLOOK, METHOD_NAME, _
+                "The shared mailbox could not be resolved.")
+        End If
+
+        Set objInbox = objNamespace.GetSharedDefaultFolder(objRecipient, OL_FOLDER_INBOX)
+        Set objResult = objInbox.Parent
+    End If
+
+    If objResult Is Nothing Then
+        Call VBA.Err.Raise( _
+            ERROR_OUTLOOK, METHOD_NAME, _
+            "The shared mailbox root could not be accessed.")
+    End If
+
+ExitPoint:
+    Set objRecipient = Nothing
+    Set objInbox = Nothing
+    Set objCandidateFolder = Nothing
+    If errNumber = 0 Then Set GetMailboxRootFolder = objResult
+    Set objResult = Nothing
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-08-27
+' Parameters:    objRootFolder As Object; strFolderPath As String
+' Returns:       Object
+' Description:   Navigates an Outlook folder path and reports the exact missing segment.
+'-------------------------------------------------------------------------------
+Private Function GetFolderByPath(ByVal objRootFolder As Object, ByVal strFolderPath As String) As Object
+    Const METHOD_NAME As String = "GetFolderByPath"
+    Dim arrParts As Variant
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngChild As Long
+    Dim lngPart As Long
+    Dim objChildFolder As Object
+    Dim objCurrentFolder As Object
+    Dim objNextFolder As Object
+    Dim strPart As String
+    Dim strWorkingPath As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If objRootFolder Is Nothing Then
+        Call VBA.Err.Raise( _
+            ERROR_OUTLOOK, METHOD_NAME, _
+            "The Outlook mailbox root is not available.")
+    End If
+
+    strWorkingPath = Replace$(Trim$(strFolderPath), "/", "\")
+
+    Do While Len(strWorkingPath) > 0 And Left$(strWorkingPath, 1) = "\"
+        strWorkingPath = Mid$(strWorkingPath, 2)
+    Loop
+
+    Do While Len(strWorkingPath) > 0 And Right$(strWorkingPath, 1) = "\"
+        strWorkingPath = Left$(strWorkingPath, Len(strWorkingPath) - 1)
+    Loop
+
+    If Len(strWorkingPath) = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_OUTLOOK, METHOD_NAME, "The Outlook folder path is blank.")
+    End If
+
+    arrParts = Split(strWorkingPath, "\")
+    Set objCurrentFolder = objRootFolder
+
+    For lngPart = LBound(arrParts) To UBound(arrParts)
+        strPart = Trim$(CStr(arrParts(lngPart)))
+
+        If Len(strPart) > 0 Then
+            If Not ( _
+                lngPart = LBound(arrParts) And _
+                StrComp(strPart, CStr(objRootFolder.Name), vbTextCompare) = 0) Then
+                Set objNextFolder = Nothing
+
+                For lngChild = 1 To objCurrentFolder.Folders.Count
+                    Set objChildFolder = objCurrentFolder.Folders.Item(lngChild)
+
+                    If StrComp(Trim$(CStr(objChildFolder.Name)), strPart, vbTextCompare) = 0 Then
+                        Set objNextFolder = objChildFolder
+                        Set objChildFolder = Nothing
+                        Exit For
+                    End If
+
+                    Set objChildFolder = Nothing
+                Next lngChild
+
+                If objNextFolder Is Nothing Then
+            Call VBA.Err.Raise( _
+                ERROR_OUTLOOK, METHOD_NAME, _
+                "Outlook folder segment '" & strPart & "' was not found in path '" & _
+                strFolderPath & "'. Current parent folder: '" & _
+                CStr(objCurrentFolder.Name) & "'.")
+        End If
+
+                Set objCurrentFolder = objNextFolder
+                Set objNextFolder = Nothing
+            End If
+        End If
+    Next lngPart
+
+ExitPoint:
+    Set objChildFolder = Nothing
+    Set objNextFolder = Nothing
+    If errNumber = 0 Then Set GetFolderByPath = objCurrentFolder
+    Set objCurrentFolder = Nothing
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "folderPath;segment", strFolderPath, strPart)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-09-02
+' Parameters:    objMail As Object
+' Returns:       String
+' Description:   Resolves the sender to a normal SMTP address for both SMTP and Exchange senders.
+'-------------------------------------------------------------------------------
+Private Function GetSenderSmtpAddress(ByVal objMail As Object) As String
+    Const METHOD_NAME As String = "GetSenderSmtpAddress"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objAddressEntry As Object
+    Dim objExchangeDistributionList As Object
+    Dim objExchangeUser As Object
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If Not objMail Is Nothing Then
+        strResult = Trim$(CStr(objMail.SenderEmailAddress))
+
+        If StrComp( _
+            Trim$(CStr(objMail.SenderEmailType)), "EX", vbTextCompare) = 0 Then
+
+            Set objAddressEntry = objMail.Sender
+
+            If Not objAddressEntry Is Nothing Then
+                Set objExchangeUser = objAddressEntry.GetExchangeUser
+
+                If Not objExchangeUser Is Nothing Then
+                    If Len(Trim$(CStr(objExchangeUser.PrimarySmtpAddress))) > 0 Then
+                        strResult = Trim$(CStr(objExchangeUser.PrimarySmtpAddress))
+                    End If
+                Else
+                    Set objExchangeDistributionList = _
+                        objAddressEntry.GetExchangeDistributionList
+
+                    If Not objExchangeDistributionList Is Nothing Then
+                        If Len(Trim$(CStr( _
+                            objExchangeDistributionList.PrimarySmtpAddress))) > 0 Then
+                            strResult = Trim$(CStr( _
+                                objExchangeDistributionList.PrimarySmtpAddress))
+                        End If
+                    End If
+                End If
+            End If
+        End If
+
+        strResult = LCase$(Trim$(strResult))
+    End If
+
+ExitPoint:
+    Set objExchangeDistributionList = Nothing
+    Set objExchangeUser = Nothing
+    Set objAddressEntry = Nothing
+    If errNumber = 0 Then GetSenderSmtpAddress = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-08-27
+' Parameters:    strSubject As String; strPhrase As String
+' Returns:       Boolean
+' Description:   Checks whether the configured phrase occurs anywhere in the Outlook subject.
+'-------------------------------------------------------------------------------
+Private Function SubjectContainsConfiguredPhrase( _
+    ByVal strSubject As String, _
+    ByVal strPhrase As String) As Boolean
+    Const METHOD_NAME As String = "SubjectContainsConfiguredPhrase"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim blnResult As Boolean
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    blnResult = ValueContainsAnyOption(strSubject, strPhrase)
+
+ExitPoint:
+    If errNumber = 0 Then SubjectContainsConfiguredPhrase = blnResult
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-08-27
+' Parameters:    strSubjectPhrase As String
+' Returns:       String
+' Description:   Builds a DASL pre-filter for subjects containing the configured phrase.
+'-------------------------------------------------------------------------------
+Private Function BuildSubjectFilter(ByVal strSubjectPhrase As String) As String
+    Const METHOD_NAME As String = "BuildSubjectFilter"
+    Dim arrOptions As Variant
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngOption As Long
+    Dim strClause As String
+    Dim strEscapedPhrase As String
+    Dim strOption As String
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    arrOptions = Split(strSubjectPhrase, ";")
+
+    For lngOption = LBound(arrOptions) To UBound(arrOptions)
+        strOption = Trim$(CStr(arrOptions(lngOption)))
+
+        If Len(strOption) > 0 Then
+            strEscapedPhrase = Replace$(strOption, "'", "''")
+            strClause = _
+                Chr$(34) & "urn:schemas:httpmail:subject" & Chr$(34) & _
+                " LIKE '%" & strEscapedPhrase & "%'"
+
+            If Len(strResult) > 0 Then strResult = strResult & " OR "
+            strResult = strResult & strClause
+        End If
+    Next lngOption
+
+    If Len(strResult) = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "OUTLOOK_SUBJECT_PREFIX does not contain a usable option.")
+    End If
+
+    strResult = "@SQL=(" & strResult & ")"
+
+ExitPoint:
+    If errNumber = 0 Then BuildSubjectFilter = strResult
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-20
+' Parameters:    strValue As String; strOptions As String
+' Returns:       Boolean
+' Description:   Returns True when a value exactly matches any semicolon-separated option.
+'-------------------------------------------------------------------------------
+Private Function ValueMatchesAnyExactOption( _
+    ByVal strValue As String, _
+    ByVal strOptions As String) As Boolean
+    Const METHOD_NAME As String = "ValueMatchesAnyExactOption"
+    Dim arrOptions As Variant
+    Dim blnResult As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngOption As Long
+    Dim strOption As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    arrOptions = Split(strOptions, ";")
+
+    For lngOption = LBound(arrOptions) To UBound(arrOptions)
+        strOption = Trim$(CStr(arrOptions(lngOption)))
+
+        If Len(strOption) > 0 Then
+            If StrComp(Trim$(strValue), strOption, vbTextCompare) = 0 Then
+                blnResult = True
+                Exit For
+            End If
+        End If
+    Next lngOption
+
+ExitPoint:
+    If errNumber = 0 Then ValueMatchesAnyExactOption = blnResult
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-20
+' Parameters:    strValue As String; strOptions As String
+' Returns:       Boolean
+' Description:   Returns True when a value starts with any semicolon-separated option.
+'-------------------------------------------------------------------------------
+Private Function ValueStartsWithAnyOption( _
+    ByVal strValue As String, _
+    ByVal strOptions As String) As Boolean
+    Const METHOD_NAME As String = "ValueStartsWithAnyOption"
+    Dim arrOptions As Variant
+    Dim blnResult As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngOption As Long
+    Dim strOption As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    arrOptions = Split(strOptions, ";")
+
+    For lngOption = LBound(arrOptions) To UBound(arrOptions)
+        strOption = Trim$(CStr(arrOptions(lngOption)))
+
+        If Len(strOption) > 0 Then
+            If Len(strValue) >= Len(strOption) Then
+                If StrComp(Left$(strValue, Len(strOption)), strOption, vbTextCompare) = 0 Then
+                    blnResult = True
+                    Exit For
+                End If
+            End If
+        End If
+    Next lngOption
+
+ExitPoint:
+    If errNumber = 0 Then ValueStartsWithAnyOption = blnResult
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-20
+' Parameters:    strValue As String; strOptions As String
+' Returns:       Boolean
+' Description:   Returns True when a value contains any semicolon-separated option.
+'-------------------------------------------------------------------------------
+Private Function ValueContainsAnyOption( _
+    ByVal strValue As String, _
+    ByVal strOptions As String) As Boolean
+    Const METHOD_NAME As String = "ValueContainsAnyOption"
+    Dim arrOptions As Variant
+    Dim blnResult As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngOption As Long
+    Dim strOption As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    arrOptions = Split(strOptions, ";")
+
+    For lngOption = LBound(arrOptions) To UBound(arrOptions)
+        strOption = Trim$(CStr(arrOptions(lngOption)))
+
+        If Len(strOption) > 0 Then
+            If InStr(1, strValue, strOption, vbTextCompare) > 0 Then
+                blnResult = True
+                Exit For
+            End If
+        End If
+    Next lngOption
+
+ExitPoint:
+    If errNumber = 0 Then ValueContainsAnyOption = blnResult
+    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
