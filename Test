@@ -1,162 +1,384 @@
+OTUI-3811 - SET UP MANAGEMENT TOOL V9_2026
+POST-IMPORT DATA INTEGRITY AUDIT (VBA)
+=====================================
 
-KROK 1 - NOWE DEKLARACJE
+PURPOSE
+-------
+Check that the final workbook actually contains data matching both source
+files. This checks cell VALUES, not whether Excel displayed a Clipboard
+warning. It does not change Launch / Migration In filtering or existing
+import logic.
+
+IMPORTANT BEFORE TESTING
 ------------------------
-Na poczatku ImportNewEvents, pod istniejacymi instrukcjami Dim,
-dodaj:
+1. Use a COPY of the XLSM workbook, not the live team file.
+2. The current ImportNewEvents logic may corrupt the final existing record
+   when updating an existing Event ID. The audit is designed to detect
+   this type of discrepancy, not to fix it.
+3. This patch assumes the source Event FA schema visible in the screenshots:
+   sheet Event, Event ID in A, Event Type in E; after column deletion,
+   original columns A,C,D,E,F,G,H,I,J,K,L,M,N,P map to Events A:N.
+4. The code is a standalone diagnostic add-on for the legacy tool. For
+   final production BAT compliance, integrate it with bat-core ErrorManager.
+5. This checks data against the path CHOSEN by DefinePaths. It cannot
+   prove that the chosen file is the latest/correct corporate source.
 
-    Dim DiagStep As String
-    Dim DiagEventID As String
-    Dim DiagRow As Long
-    Dim ErrNo As Long
-    Dim ErrText As String
+INSTALLATION
+------------
+A. In the VBE: Insert > Module. Rename the module to modImportAudit.
+   Paste the code from the section MODULE CODE below. Do not add any
+   Attribute VB_Name line.
 
+B. In Module1, find:
 
-KROK 2 - ZMIANA OBSLUGI BLEDU
------------------------------
-Znajdz WYLACZNIE wewnatrz ImportNewEvents:
+    Sub Importfiles(EventfileFA, Fondsliste, FondslisteUBIX, FondslisteISISET)
+        Call ImportFondsliste(Fondsliste)
+        Call ImportNewEvents(EventfileFA)
+    End Sub
 
-    On Error GoTo 2
+   CHANGE IT TO:
 
-Zamien na:
+    Sub Importfiles(EventfileFA, Fondsliste, FondslisteUBIX, FondslisteISISET)
+        Call ImportFondsliste(Fondsliste)
+        Call ImportNewEvents(EventfileFA)
 
-    On Error GoTo ImportError
-    DiagStep = "Opening Event FA source file"
+        If Not AuditSetupImports(ThisWorkbook, _
+                                 CStr(EventfileFA), CStr(Fondsliste)) Then
+            Exit Sub
+        End If
+    End Sub
 
+   Note: ThisWorkbook is the existing workbook containing the VBA code.
+   If the tool has a separate master workbook object, pass that object
+   instead. Do NOT pass ActiveWorkbook because the source workbooks may
+   become active during import.
 
-KROK 3 - REJESTROWANIE AKTUALNEGO WIERSZA / EVENT ID
------------------------------------------------------
-Znajdz petle w ImportNewEvents:
+C. In Module1, within ImportNewEvents, find the existing premature
+   success box (approximately):
 
-    For a = 1 To i
+    MsgBox Counter & " new events added to list.", , "Import finished"
 
-Bezposrednio pod nia dodaj:
+   Replace that single line with:
 
-    DiagRow = a
-    DiagEventID = ""
-    DiagStep = "Reading Event ID"
+    Debug.Print Counter & " new events added (audit still pending)."
 
-UWAGA: W tym patchu celowo NIE zmieniamy 'For a = 1 To i'
-na 'For a = 2 To i', aby nie zmieniac logiki podczas testu.
+   The new audit now owns the final PASS/FAIL message, so the user will
+   no longer see "Import finished" before integrity checks have run.
 
-Znajdz:
+D. VBE > Debug > Compile VBAProject.
+E. Run DefineLocation on the TEST COPY, choosing the same location as
+   the relevant Jira issue. Capture the PASS/FAIL message.
 
-    SearchValue = Selection.Value
+WHAT IS CHECKED
+---------------
+1. Fondsliste: the values of source Liste!B9:AC10000 must exactly match
+   master Fondsliste!A1:AB9992 (28 columns, 9992 rows).
+2. Event FA: only source rows with Event Type equal to Launch,
+   MigrationIn or Migration In are considered.
+3. Every eligible source Event ID must exist in master Events, normally
+   in exactly 5 process rows; all 14 imported columns must agree with
+   the expected source column mapping in every one of those rows.
+4. Duplicate or blank eligible source Event IDs are flagged, rather than
+   being silently accepted.
+5. Any mismatch produces a FAIL with Event ID, sheet/cell and values.
 
-Bezposrednio pod tym wstaw:
+LIMITATIONS
+-----------
+- The five-row rule is based on the shown legacy ImportNewEvents code.
+  If business users intentionally maintain different counts, adjust the
+  validator after confirming requirements.
+- Only the expected imported A:N fields are checked in Events; status
+  fields and formulas O:V are intentionally not compared against Event FA.
+- PASS proves values match these two selected input files at test time.
+  It does not validate source data quality, file recency, permissions,
+  unintended changes to unrelated historic rows, or subsequent saves.
+- This is not the final corporate BAT ErrorManager integration.
 
-    DiagEventID = CStr(SearchValue)
-    DiagStep = "Processing Event ID"
+MODULE CODE - modImportAudit
+============================
+Option Explicit
 
+Private Const CLASS_NAME As String = "modImportAudit"
+Private Const AUDIT_ERROR As Long = vbObjectError + 3811
 
-KROK 4 - INFORMACJA O GALEZI PRZETWARZANIA
-------------------------------------------
-W ImportNewEvents znajdz blok sprawdzajacy Event ID:
+'-------------------------------------------------------------------------------
+' Description: Verify imported Fondsliste and current Event FA values.
+'-------------------------------------------------------------------------------
+Public Function AuditSetupImports( _
+    ByVal wbMaster As Workbook, _
+    ByVal eventFilePath As String, _
+    ByVal fondsFilePath As String) As Boolean
 
-    If RNG Is Nothing Then
-        ' ... pozostaly istniejacy kod ...
-    Else
-        ' ... pozostaly istniejacy kod ...
+    Const METHOD_NAME As String = "AuditSetupImports"
+    Dim wbEvent As Workbook
+    Dim wbFonds As Workbook
+    Dim errNumber As Long
+    Dim errDescription As String
+    Dim eventCount As Long
+
+    On Error GoTo ErrHandler
+
+    Debug.Print "IMPORT AUDIT - START"
+    Debug.Print "Event source: " & eventFilePath
+    Debug.Print "Fonds source: " & fondsFilePath
+
+    Set wbFonds = Application.Workbooks.Open( _
+        Filename:=fondsFilePath, UpdateLinks:=0, ReadOnly:=True)
+    Call CheckFondsliste( _
+        wbFonds.Worksheets("Liste"), wbMaster.Worksheets("Fondsliste"))
+
+    wbFonds.Close SaveChanges:=False
+    Set wbFonds = Nothing
+
+    Set wbEvent = Application.Workbooks.Open( _
+        Filename:=eventFilePath, UpdateLinks:=0, ReadOnly:=True)
+    eventCount = CheckEvents( _
+        wbEvent.Worksheets("Event"), wbMaster.Worksheets("Events"))
+
+    wbEvent.Close SaveChanges:=False
+    Set wbEvent = Nothing
+
+    AuditSetupImports = True
+    Debug.Print "IMPORT AUDIT - PASS"
+    MsgBox "IMPORT VERIFIED" & vbCrLf & vbCrLf & _
+           "Fondsliste: source values match the imported sheet." & vbCrLf & _
+           "Event FA: " & eventCount & " eligible Event IDs checked." & vbCrLf & _
+           "Each Event ID has 5 matching process rows (A:N).", _
+           vbInformation, "OTUI-3811 - Import Audit PASS"
+
+ExitPoint:
+    ' Cleanup is isolated so it does not replace the original error.
+    On Error Resume Next
+    If Not wbEvent Is Nothing Then wbEvent.Close SaveChanges:=False
+    If Not wbFonds Is Nothing Then wbFonds.Close SaveChanges:=False
+    Set wbEvent = Nothing
+    Set wbFonds = Nothing
+    On Error GoTo 0
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    AuditSetupImports = False
+    Debug.Print "IMPORT AUDIT - FAIL: " & errNumber & " / " & errDescription
+    MsgBox "IMPORT VERIFICATION FAILED" & vbCrLf & vbCrLf & _
+           "Error: " & errNumber & vbCrLf & _
+           "Details: " & Left$(errDescription, 700) & vbCrLf & vbCrLf & _
+           "Do not treat this import as validated." & vbCrLf & _
+           "Review the source files and test workbook.", _
+           vbCritical, "OTUI-3811 - Import Audit FAIL"
+    Resume ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Description: Check the fixed-value Fondsliste copy visible in Module1.
+'-------------------------------------------------------------------------------
+Private Sub CheckFondsliste( _
+    ByVal wsSource As Worksheet, ByVal wsTarget As Worksheet)
+
+    Dim sourceData As Variant
+    Dim targetData As Variant
+    Dim r As Long
+    Dim c As Long
+
+    sourceData = wsSource.Range("B9:AC10000").Value2
+    targetData = wsTarget.Range("A1:AB9992").Value2
+
+    For r = 1 To UBound(sourceData, 1)
+        For c = 1 To UBound(sourceData, 2)
+            If Not AuditSameValue(sourceData(r, c), targetData(r, c)) Then
+                Call RaiseAuditError( _
+                    "Fondsliste mismatch at source " & _
+                    wsSource.Cells(r + 8, c + 1).Address(False, False) & _
+                    " -> target " & _
+                    wsTarget.Cells(r, c).Address(False, False) & _
+                    ". Expected=" & AuditValueText(sourceData(r, c)) & _
+                    "; Actual=" & AuditValueText(targetData(r, c)))
+            End If
+        Next c
+    Next r
+
+    Debug.Print "Fondsliste OK: 9992 rows x 28 columns compared."
+End Sub
+
+'-------------------------------------------------------------------------------
+' Description: Compare eligible Event FA records to all five target rows.
+'-------------------------------------------------------------------------------
+Private Function CheckEvents( _
+    ByVal wsSource As Worksheet, ByVal wsTarget As Worksheet) As Long
+
+    Dim mapCols As Variant
+    Dim sourceData As Variant
+    Dim targetData As Variant
+    Dim byID As Object
+    Dim seenID As Object
+    Dim matches As Collection
+    Dim itemRow As Variant
+    Dim eventID As String
+    Dim sourceRow As Long
+    Dim targetRow As Long
+    Dim lastSource As Long
+    Dim lastTarget As Long
+    Dim c As Long
+    Dim sourceCol As Long
+    Dim stage As String
+
+    mapCols = Array(1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16)
+
+    lastSource = Application.Max( _
+        wsSource.Cells(wsSource.Rows.Count, "A").End(xlUp).Row, _
+        wsSource.Cells(wsSource.Rows.Count, "E").End(xlUp).Row)
+    lastTarget = wsTarget.Cells(wsTarget.Rows.Count, "A").End(xlUp).Row
+
+    If lastSource < 2 Then
+        Call RaiseAuditError("Event FA source contains no event rows.")
     End If
 
-JAKO PIERWSZA linie pod 'If RNG Is Nothing Then' dodaj:
+    If lastTarget < 2 Then
+        Call RaiseAuditError("Events master contains no event rows.")
+    End If
 
-    DiagStep = "Creating new event"
+    sourceData = wsSource.Range("A1:P" & lastSource).Value2
+    targetData = wsTarget.Range("A1:N" & lastTarget).Value2
 
-JAKO PIERWSZA linie pod odpowiadajacym mu 'Else' dodaj:
+    Set byID = CreateObject("Scripting.Dictionary")
+    byID.CompareMode = vbTextCompare
+    Set seenID = CreateObject("Scripting.Dictionary")
+    seenID.CompareMode = vbTextCompare
 
-    DiagStep = "Updating existing event"
+    ' Index each existing target row by Event ID.
+    For targetRow = 2 To UBound(targetData, 1)
+        eventID = Trim$(AuditValueKey(targetData(targetRow, 1)))
+        If Len(eventID) > 0 Then
+            If Not byID.Exists(eventID) Then
+                Set matches = New Collection
+                byID.Add eventID, matches
+            End If
+            Set matches = byID.Item(eventID)
+            matches.Add targetRow
+        End If
+    Next targetRow
 
-Nie wstawiaj tych linijek do innych blokow If / Else.
+    For sourceRow = 2 To UBound(sourceData, 1)
+        stage = LCase$(AuditValueKey(sourceData(sourceRow, 5)))
+        If IsRelevantEvent(stage) Then
+            eventID = Trim$(AuditValueKey(sourceData(sourceRow, 1)))
 
+            If Len(eventID) = 0 Then
+                Call RaiseAuditError( _
+                    "Blank Event ID at Event FA row " & sourceRow & ".")
+            End If
 
-KROK 5 - DIAGNOSTYKA FORMATOWANIA
---------------------------------
-Bezposrednio PRZED istniejacym:
+            If seenID.Exists(eventID) Then
+                Call RaiseAuditError( _
+                    "Duplicate eligible Event ID in source: " & eventID & _
+                    " (rows " & seenID.Item(eventID) & " and " & sourceRow & ").")
+            End If
+            seenID.Add eventID, sourceRow
 
-    Call FormatList
+            If Not byID.Exists(eventID) Then
+                Call RaiseAuditError( _
+                    "Missing Event ID in target Events: " & eventID & _
+                    " (source row " & sourceRow & ").")
+            End If
 
-Dodaj:
+            Set matches = byID.Item(eventID)
+            If matches.Count <> 5 Then
+                Call RaiseAuditError( _
+                    "Event ID " & eventID & " has " & matches.Count & _
+                    " target rows (expected 5).")
+            End If
 
-    DiagStep = "Formatting results"
+            For Each itemRow In matches
+                targetRow = CLng(itemRow)
+                For c = 1 To 14
+                    sourceCol = CLng(mapCols(c - 1))
+                    If Not AuditSameValue( _
+                        sourceData(sourceRow, sourceCol), targetData(targetRow, c)) Then
+                        Call RaiseAuditError( _
+                            "Event ID " & eventID & "; " & _
+                            "Event FA row " & sourceRow & "; " & _
+                            "Events!" & wsTarget.Cells(targetRow, c).Address(False, False) & _
+                            " (source col " & sourceCol & "). " & _
+                            "Expected=" & AuditValueText(sourceData(sourceRow, sourceCol)) & _
+                            "; Actual=" & AuditValueText(targetData(targetRow, c)))
+                    End If
+                Next c
+            Next itemRow
 
+            CheckEvents = CheckEvents + 1
+        End If
+    Next sourceRow
 
-KROK 6 - ZASTAPIENIE KONCOWEGO HANDLERA
----------------------------------------
-Na koncu ImportNewEvents znajdz koncowy blok (moze wygladac tak):
+    If CheckEvents = 0 Then
+        Call RaiseAuditError( _
+            "No Launch/Migration In rows were found in the selected Event FA file.")
+    End If
 
-    Exit Sub
+    Debug.Print "Events OK: " & CheckEvents & " eligible Event IDs checked."
+End Function
 
-    2
-    Set QuellWB = Nothing
-    Set QuellWS = Nothing
-    Set ZielWB = Nothing
-    Set ZielWS = Nothing
-    Set Zwischenspeicher = Nothing
+'-------------------------------------------------------------------------------
+' Description: Preserve the original event type filter; case-insensitive.
+'-------------------------------------------------------------------------------
+Private Function IsRelevantEvent(ByVal eventType As String) As Boolean
+    Select Case eventType
+        Case "launch", "migrationin", "migration in"
+            IsRelevantEvent = True
+    End Select
+End Function
 
-    End Sub
+'-------------------------------------------------------------------------------
+' Description: Compare Excel Value2 values (including empty/error cells).
+'-------------------------------------------------------------------------------
+Private Function AuditSameValue( _
+    ByRef expectedValue As Variant, ByRef actualValue As Variant) As Boolean
 
-ZAMIEN GO NA PONIZSZY CALY BLOK:
+    If IsError(expectedValue) Or IsError(actualValue) Then
+        AuditSameValue = IsError(expectedValue) And IsError(actualValue)
+        Exit Function
+    End If
 
-    Exit Sub
+    If IsEmpty(expectedValue) Or IsEmpty(actualValue) Then
+        AuditSameValue = (Len(AuditValueKey(expectedValue)) = 0 And _
+                          Len(AuditValueKey(actualValue)) = 0)
+        Exit Function
+    End If
 
-ImportError:
+    If VarType(expectedValue) <> VarType(actualValue) Then Exit Function
 
-    ErrNo = Err.Number
-    ErrText = Err.Description
+    If IsNumeric(expectedValue) And VarType(expectedValue) <> vbString Then
+        AuditSameValue = (CDbl(expectedValue) = CDbl(actualValue))
+    Else
+        AuditSameValue = (StrComp(CStr(expectedValue), _
+                                 CStr(actualValue), vbBinaryCompare) = 0)
+    End If
+End Function
 
-    Debug.Print "IMPORT ERROR"
-    Debug.Print "Error: " & ErrNo
-    Debug.Print "Description: " & ErrText
-    Debug.Print "Step: " & DiagStep
-    Debug.Print "Event ID: " & DiagEventID
-    Debug.Print "Temporary row: " & DiagRow
-    Debug.Print "Source file: " & CStr(EventfileFA)
+Private Function AuditValueKey(ByRef cellValue As Variant) As String
+    If IsError(cellValue) Then
+        AuditValueKey = "<EXCEL_ERROR>"
+    ElseIf IsEmpty(cellValue) Or IsNull(cellValue) Then
+        AuditValueKey = vbNullString
+    Else
+        AuditValueKey = CStr(cellValue)
+    End If
+End Function
 
-    MsgBox "IMPORT FAILED!" & vbCrLf & vbCrLf & _
-           "Error number: " & ErrNo & vbCrLf & _
-           "Description: " & ErrText & vbCrLf & _
-           "Step: " & DiagStep & vbCrLf & _
-           "Event ID: " & DiagEventID & vbCrLf & _
-           "Temporary row: " & DiagRow & vbCrLf & _
-           "Source file: " & CStr(EventfileFA), _
-           vbCritical, "Event FA Import Error"
+Private Function AuditValueText(ByRef cellValue As Variant) As String
+    If IsError(cellValue) Then
+        AuditValueText = "<EXCEL_ERROR>"
+    ElseIf IsEmpty(cellValue) Or IsNull(cellValue) Then
+        AuditValueText = "<EMPTY>"
+    Else
+        AuditValueText = Left$(CStr(cellValue), 100)
+    End If
+End Function
 
-    On Error Resume Next
-    Application.CutCopyMode = False
-    Set QuellWS = Nothing
-    Set QuellWB = Nothing
-    Set ZielWS = Nothing
-    Set ZielWB = Nothing
-    Set Zwischenspeicher = Nothing
-    On Error GoTo 0
+Private Sub RaiseAuditError(ByVal details As String)
+    VBA.Err.Raise AUDIT_ERROR, CLASS_NAME, details
+End Sub
 
-    End Sub
-
-WAZNE: Usun stara etykiete '2' tylko z ImportNewEvents.
-Nie ruszaj etykiet '2' w innych procedurach Module1.
-
-
-KROK 7 - TEST
--------------
-1. Zapisz zmiany w KOPII pliku XLSM.
-2. W edytorze VBA wybierz Debug > Compile VBAProject.
-3. Uruchom DefineLocation, wybierz Warsaw.
-4. Jesli pojawi sie 'Event FA Import Error', zapisz:
-   - Error number i Description,
-   - Step,
-   - Event ID,
-   - Temporary row,
-   - Source file.
-5. Dodatkowy log zobaczysz w VBA Immediate Window (Ctrl+G).
-
-UWAGI INTERPRETACYJNE
----------------------
-* 'Temporary row' wskazuje numer wiersza w tymczasowym sheet3,
-  niekoniecznie ten sam numer co w oryginalnym pliku Event FA.
-* Jesli komunikat sie nie pojawi, import nadal moze miec blad
-  logiczny (np. niepoprawnie nadpisywac rekordy).
-* Procedury DefinePaths i ImportFondsliste maja niezalezne
-  handlery; ten patch nie diagnozuje bledow w ich wnetrzu.
-* Ten patch jest wylacznie diagnostyczny. Nie wdraza jeszcze
-  BAT ErrorManager ani zapisu bledow do firmowego Error Log.
+END OF MODULE CODE
+==================
 
