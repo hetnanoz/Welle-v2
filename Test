@@ -1,0 +1,162 @@
+
+KROK 1 - NOWE DEKLARACJE
+------------------------
+Na poczatku ImportNewEvents, pod istniejacymi instrukcjami Dim,
+dodaj:
+
+    Dim DiagStep As String
+    Dim DiagEventID As String
+    Dim DiagRow As Long
+    Dim ErrNo As Long
+    Dim ErrText As String
+
+
+KROK 2 - ZMIANA OBSLUGI BLEDU
+-----------------------------
+Znajdz WYLACZNIE wewnatrz ImportNewEvents:
+
+    On Error GoTo 2
+
+Zamien na:
+
+    On Error GoTo ImportError
+    DiagStep = "Opening Event FA source file"
+
+
+KROK 3 - REJESTROWANIE AKTUALNEGO WIERSZA / EVENT ID
+-----------------------------------------------------
+Znajdz petle w ImportNewEvents:
+
+    For a = 1 To i
+
+Bezposrednio pod nia dodaj:
+
+    DiagRow = a
+    DiagEventID = ""
+    DiagStep = "Reading Event ID"
+
+UWAGA: W tym patchu celowo NIE zmieniamy 'For a = 1 To i'
+na 'For a = 2 To i', aby nie zmieniac logiki podczas testu.
+
+Znajdz:
+
+    SearchValue = Selection.Value
+
+Bezposrednio pod tym wstaw:
+
+    DiagEventID = CStr(SearchValue)
+    DiagStep = "Processing Event ID"
+
+
+KROK 4 - INFORMACJA O GALEZI PRZETWARZANIA
+------------------------------------------
+W ImportNewEvents znajdz blok sprawdzajacy Event ID:
+
+    If RNG Is Nothing Then
+        ' ... pozostaly istniejacy kod ...
+    Else
+        ' ... pozostaly istniejacy kod ...
+    End If
+
+JAKO PIERWSZA linie pod 'If RNG Is Nothing Then' dodaj:
+
+    DiagStep = "Creating new event"
+
+JAKO PIERWSZA linie pod odpowiadajacym mu 'Else' dodaj:
+
+    DiagStep = "Updating existing event"
+
+Nie wstawiaj tych linijek do innych blokow If / Else.
+
+
+KROK 5 - DIAGNOSTYKA FORMATOWANIA
+--------------------------------
+Bezposrednio PRZED istniejacym:
+
+    Call FormatList
+
+Dodaj:
+
+    DiagStep = "Formatting results"
+
+
+KROK 6 - ZASTAPIENIE KONCOWEGO HANDLERA
+---------------------------------------
+Na koncu ImportNewEvents znajdz koncowy blok (moze wygladac tak):
+
+    Exit Sub
+
+    2
+    Set QuellWB = Nothing
+    Set QuellWS = Nothing
+    Set ZielWB = Nothing
+    Set ZielWS = Nothing
+    Set Zwischenspeicher = Nothing
+
+    End Sub
+
+ZAMIEN GO NA PONIZSZY CALY BLOK:
+
+    Exit Sub
+
+ImportError:
+
+    ErrNo = Err.Number
+    ErrText = Err.Description
+
+    Debug.Print "IMPORT ERROR"
+    Debug.Print "Error: " & ErrNo
+    Debug.Print "Description: " & ErrText
+    Debug.Print "Step: " & DiagStep
+    Debug.Print "Event ID: " & DiagEventID
+    Debug.Print "Temporary row: " & DiagRow
+    Debug.Print "Source file: " & CStr(EventfileFA)
+
+    MsgBox "IMPORT FAILED!" & vbCrLf & vbCrLf & _
+           "Error number: " & ErrNo & vbCrLf & _
+           "Description: " & ErrText & vbCrLf & _
+           "Step: " & DiagStep & vbCrLf & _
+           "Event ID: " & DiagEventID & vbCrLf & _
+           "Temporary row: " & DiagRow & vbCrLf & _
+           "Source file: " & CStr(EventfileFA), _
+           vbCritical, "Event FA Import Error"
+
+    On Error Resume Next
+    Application.CutCopyMode = False
+    Set QuellWS = Nothing
+    Set QuellWB = Nothing
+    Set ZielWS = Nothing
+    Set ZielWB = Nothing
+    Set Zwischenspeicher = Nothing
+    On Error GoTo 0
+
+    End Sub
+
+WAZNE: Usun stara etykiete '2' tylko z ImportNewEvents.
+Nie ruszaj etykiet '2' w innych procedurach Module1.
+
+
+KROK 7 - TEST
+-------------
+1. Zapisz zmiany w KOPII pliku XLSM.
+2. W edytorze VBA wybierz Debug > Compile VBAProject.
+3. Uruchom DefineLocation, wybierz Warsaw.
+4. Jesli pojawi sie 'Event FA Import Error', zapisz:
+   - Error number i Description,
+   - Step,
+   - Event ID,
+   - Temporary row,
+   - Source file.
+5. Dodatkowy log zobaczysz w VBA Immediate Window (Ctrl+G).
+
+UWAGI INTERPRETACYJNE
+---------------------
+* 'Temporary row' wskazuje numer wiersza w tymczasowym sheet3,
+  niekoniecznie ten sam numer co w oryginalnym pliku Event FA.
+* Jesli komunikat sie nie pojawi, import nadal moze miec blad
+  logiczny (np. niepoprawnie nadpisywac rekordy).
+* Procedury DefinePaths i ImportFondsliste maja niezalezne
+  handlery; ten patch nie diagnozuje bledow w ich wnetrzu.
+* Ten patch jest wylacznie diagnostyczny. Nie wdraza jeszcze
+  BAT ErrorManager ani zapisu bledow do firmowego Error Log.
+
