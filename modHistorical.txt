@@ -36,19 +36,21 @@ Public Sub UpdateHistoricalFiles( _
         Next lngRoot
     End If
 
-    arrUnknownData = FilterUnknownTransactions(arrCombined)
-
-    If UBound(arrUnknownData, 1) > 1 Then
-        For lngRoot = 1 To colDestinationRoots.Count
-            strRootPath = CStr(colDestinationRoots(lngRoot))
-            strHistoricalPath = CombinePath(strRootPath, HISTORICAL_UNKNOWN_FILE)
-            Call UpdateHistoricalWorkbook(strHistoricalPath, arrUnknownData, False)
-        Next lngRoot
-    End If
-
-    arrUnknownData = Empty
-
     If blnCreateTeamFiles Then
+        arrUnknownData = FilterUnknownTransactions(arrCombined)
+
+        If UBound(arrUnknownData, 1) > 1 Then
+            For lngRoot = 1 To colDestinationRoots.Count
+                strRootPath = CStr(colDestinationRoots(lngRoot))
+                strHistoricalPath = CombinePath( _
+                    strRootPath, HISTORICAL_UNKNOWN_FILE)
+                Call UpdateHistoricalWorkbook( _
+                    strHistoricalPath, arrUnknownData, False)
+            Next lngRoot
+        End If
+
+        arrUnknownData = Empty
+
         For lngTeam = 1 To colTeams.Count
             strTeam = CStr(colTeams(lngTeam))
             strTeamFilePart = SanitizeFileNamePart(strTeam)
@@ -102,6 +104,7 @@ Private Sub UpdateHistoricalWorkbook( _
     Dim cleanupErrNumber As Long
     Dim blnHeaderUpgraded As Boolean
     Dim blnHttpPath As Boolean
+    Dim blnLayoutUpgraded As Boolean
     Dim blnNewWorkbook As Boolean
     Dim dictKeys As Object
     Dim errDescription As String
@@ -111,6 +114,7 @@ Private Sub UpdateHistoricalWorkbook( _
     Dim lngColumn As Long
     Dim lngCurrentLastRow As Long
     Dim lngExistingLastRow As Long
+    Dim lngHeaderRow As Long
     Dim lngNewCount As Long
     Dim lngOutputRow As Long
     Dim lngRow As Long
@@ -174,10 +178,21 @@ Private Sub UpdateHistoricalWorkbook( _
 
     Set wksHistory = GetHistoricalWorksheet(wkbHistory, blnNewWorkbook)
 
-    If blnNewWorkbook Then
-        Call InitializeHistoricalHeader(wksHistory)
+    If blnCombinedDashboard Then
+        lngHeaderRow = COMBINED_TABLE_HEADER_ROW
+        If Not blnNewWorkbook Then
+            Call PrepareCombinedHistoricalLayout( _
+                wksHistory, blnLayoutUpgraded)
+        End If
     Else
-        Call ValidateHistoricalHeader(wksHistory, strHistoricalPath, blnHeaderUpgraded)
+        lngHeaderRow = 1
+    End If
+
+    If blnNewWorkbook Then
+        Call InitializeHistoricalHeader(wksHistory, lngHeaderRow)
+    Else
+        Call ValidateHistoricalHeader( _
+            wksHistory, strHistoricalPath, lngHeaderRow, blnHeaderUpgraded)
     End If
 
     wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
@@ -186,14 +201,16 @@ Private Sub UpdateHistoricalWorkbook( _
     wksHistory.Columns("W:W").NumberFormat = "@"
 
     lngExistingLastRow = wksHistory.Cells(wksHistory.Rows.Count, 6).End(xlUp).Row
-    If lngExistingLastRow < 1 Then lngExistingLastRow = 1
+    If lngExistingLastRow < lngHeaderRow Then
+        lngExistingLastRow = lngHeaderRow
+    End If
 
     Set dictKeys = CreateObject("Scripting.Dictionary")
     dictKeys.CompareMode = vbBinaryCompare
 
-    If lngExistingLastRow >= 2 Then
+    If lngExistingLastRow > lngHeaderRow Then
         arrExisting = wksHistory.Range( _
-            wksHistory.Cells(1, 1), _
+            wksHistory.Cells(lngHeaderRow, 1), _
             wksHistory.Cells(lngExistingLastRow, OUTPUT_COLUMN_COUNT)).Value2
 
         For lngRow = 2 To UBound(arrExisting, 1)
@@ -236,13 +253,15 @@ Private Sub UpdateHistoricalWorkbook( _
                 lngExistingLastRow + lngNewCount, OUTPUT_COLUMN_COUNT)).Value2 = arrNewRows
     End If
 
-    Call ApplyHistoricalHeaderStyle(wksHistory)
+    Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
 
-    If blnNewWorkbook Or lngNewCount > 0 Or blnHeaderUpgraded Then
+    If blnNewWorkbook Or lngNewCount > 0 Or _
+        blnHeaderUpgraded Or blnLayoutUpgraded Then
+
         lngExistingLastRow = lngExistingLastRow + lngNewCount
         Call AutoFitColumnsWithPadding( _
             wksHistory.Range( _
-                wksHistory.Cells(1, 1), _
+                wksHistory.Cells(lngHeaderRow, 1), _
                 wksHistory.Cells(lngExistingLastRow, OUTPUT_COLUMN_COUNT)).Columns, _
             2)
     End If
@@ -252,8 +271,8 @@ Private Sub UpdateHistoricalWorkbook( _
         blnDashboardUpdated = True
     End If
 
-    If blnNewWorkbook Or lngNewCount > 0 Or _
-        blnHeaderUpgraded Or blnDashboardUpdated Then
+    If blnNewWorkbook Or lngNewCount > 0 Or blnHeaderUpgraded Or _
+        blnLayoutUpgraded Or blnDashboardUpdated Then
 
         Call ApplyWorkbookSensitivityLabel(wkbHistory)
         Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
@@ -357,12 +376,61 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    Historical sheet and layout-upgrade result.
+' Returns:       ---
+' Description:   Moves a legacy Combined header from row 1 to row 11.
+'-------------------------------------------------------------------------------
+Private Sub PrepareCombinedHistoricalLayout( _
+    ByVal wksHistory As Excel.Worksheet, _
+    ByRef blnLayoutUpgraded As Boolean)
+
+    Const METHOD_NAME As String = "PrepareCombinedHistoricalLayout"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strHeaderRowOne As String
+    Dim strHeaderRowTarget As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    blnLayoutUpgraded = False
+    strHeaderRowOne = Trim$(CStr(wksHistory.Cells(1, 1).Value2))
+    strHeaderRowTarget = Trim$(CStr( _
+        wksHistory.Cells(COMBINED_TABLE_HEADER_ROW, 1).Value2))
+
+    If StrComp(strHeaderRowTarget, "MF", vbTextCompare) <> 0 Then
+        If StrComp(strHeaderRowOne, "MF", vbTextCompare) = 0 Then
+            wksHistory.Rows( _
+                "1:" & CStr(COMBINED_TABLE_HEADER_ROW - 1)).Insert Shift:=xlDown
+            blnLayoutUpgraded = True
+        End If
+    End If
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
-' Parameters:    wksHistory As Excel.Worksheet
+' Parameters:    wksHistory As Excel.Worksheet; lngHeaderRow As Long
 ' Returns:       ---
 ' Description:   Initializes a new historical workbook header.
 '-------------------------------------------------------------------------------
-Private Sub InitializeHistoricalHeader(ByVal wksHistory As Excel.Worksheet)
+Private Sub InitializeHistoricalHeader( _
+    ByVal wksHistory As Excel.Worksheet, _
+    ByVal lngHeaderRow As Long)
     Const METHOD_NAME As String = "InitializeHistoricalHeader"
     Dim arrHeaders As Variant
     Dim errDescription As String
@@ -374,13 +442,14 @@ Private Sub InitializeHistoricalHeader(ByVal wksHistory As Excel.Worksheet)
     arrHeaders = GetOutputHeaders()
 
     For lngColumn = 1 To OUTPUT_COLUMN_COUNT
-        wksHistory.Cells(1, lngColumn).Value2 = arrHeaders(lngColumn - 1)
+        wksHistory.Cells(lngHeaderRow, lngColumn).Value2 = _
+            arrHeaders(lngColumn - 1)
     Next lngColumn
 
-    Call ApplyHistoricalHeaderStyle(wksHistory)
+    Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
     Call wksHistory.Range( _
-        wksHistory.Cells(1, 1), _
-        wksHistory.Cells(1, OUTPUT_COLUMN_COUNT)).AutoFilter
+        wksHistory.Cells(lngHeaderRow, 1), _
+        wksHistory.Cells(lngHeaderRow, OUTPUT_COLUMN_COUNT)).AutoFilter
     wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("R:S").NumberFormat = "#,##0.00"
@@ -408,6 +477,7 @@ End Sub
 Private Sub ValidateHistoricalHeader( _
     ByVal wksHistory As Excel.Worksheet, _
     ByVal strHistoricalPath As String, _
+    ByVal lngHeaderRow As Long, _
     ByRef blnHeaderUpgraded As Boolean)
     Const METHOD_NAME As String = "ValidateHistoricalHeader"
     Dim arrHeaders As Variant
@@ -423,7 +493,8 @@ Private Sub ValidateHistoricalHeader( _
     blnHeaderUpgraded = False
 
     For lngColumn = 1 To OUTPUT_TIMESTAMP_COLUMN - 1
-        strActual = Trim$(CStr(wksHistory.Cells(1, lngColumn).Value2))
+        strActual = Trim$(CStr( _
+            wksHistory.Cells(lngHeaderRow, lngColumn).Value2))
         strExpected = CStr(arrHeaders(lngColumn - 1))
 
         If StrComp(strActual, strExpected, vbTextCompare) <> 0 Then
@@ -435,11 +506,12 @@ Private Sub ValidateHistoricalHeader( _
     Next lngColumn
 
     For lngColumn = OUTPUT_TIMESTAMP_COLUMN To OUTPUT_USER_ID_COLUMN
-        strActual = Trim$(CStr(wksHistory.Cells(1, lngColumn).Value2))
+        strActual = Trim$(CStr( _
+            wksHistory.Cells(lngHeaderRow, lngColumn).Value2))
         strExpected = CStr(arrHeaders(lngColumn - 1))
 
         If Len(strActual) = 0 Then
-            wksHistory.Cells(1, lngColumn).Value2 = strExpected
+            wksHistory.Cells(lngHeaderRow, lngColumn).Value2 = strExpected
             blnHeaderUpgraded = True
         ElseIf StrComp(strActual, strExpected, vbTextCompare) <> 0 Then
             Call VBA.Err.Raise( _
@@ -539,12 +611,14 @@ Private Sub UpsertReviewedTransaction( _
     Dim arrExisting As Variant
     Dim blnCloseRequired As Boolean
     Dim blnHeaderUpgraded As Boolean
+    Dim blnLayoutUpgraded As Boolean
     Dim blnNewWorkbook As Boolean
     Dim cleanupErrNumber As Long
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngColumn As Long
     Dim lngExistingLastRow As Long
+    Dim lngHeaderRow As Long
     Dim lngRow As Long
     Dim lngTargetRow As Long
     Dim strReviewedKey As String
@@ -598,20 +672,32 @@ Private Sub UpsertReviewedTransaction( _
 
     Set wksHistory = GetHistoricalWorksheet(wkbHistory, blnNewWorkbook)
 
+    If blnCombinedDashboard Then
+        lngHeaderRow = COMBINED_TABLE_HEADER_ROW
+        If Not blnNewWorkbook Then
+            Call PrepareCombinedHistoricalLayout( _
+                wksHistory, blnLayoutUpgraded)
+        End If
+    Else
+        lngHeaderRow = 1
+    End If
+
     If blnNewWorkbook Then
-        Call InitializeHistoricalHeader(wksHistory)
+        Call InitializeHistoricalHeader(wksHistory, lngHeaderRow)
     Else
         Call ValidateHistoricalHeader( _
-            wksHistory, strHistoricalPath, blnHeaderUpgraded)
+            wksHistory, strHistoricalPath, lngHeaderRow, blnHeaderUpgraded)
     End If
 
     lngExistingLastRow = wksHistory.Cells(wksHistory.Rows.Count, 6).End(xlUp).Row
-    If lngExistingLastRow < 1 Then lngExistingLastRow = 1
+    If lngExistingLastRow < lngHeaderRow Then
+        lngExistingLastRow = lngHeaderRow
+    End If
     strReviewedKey = BuildTransactionKey(arrReviewed, 2)
 
-    If lngExistingLastRow >= 2 Then
+    If lngExistingLastRow > lngHeaderRow Then
         arrExisting = wksHistory.Range( _
-            wksHistory.Cells(1, 1), _
+            wksHistory.Cells(lngHeaderRow, 1), _
             wksHistory.Cells(lngExistingLastRow, OUTPUT_COLUMN_COUNT)).Value2
 
         For lngRow = 2 To UBound(arrExisting, 1)
@@ -619,7 +705,7 @@ Private Sub UpsertReviewedTransaction( _
                 BuildTransactionKey(arrExisting, lngRow), _
                 strReviewedKey, vbBinaryCompare) = 0 Then
 
-                lngTargetRow = lngRow
+                lngTargetRow = lngHeaderRow + lngRow - 1
                 Exit For
             End If
         Next lngRow
@@ -652,10 +738,10 @@ Private Sub UpsertReviewedTransaction( _
         lngExistingLastRow = lngTargetRow
     End If
 
-    Call ApplyHistoricalHeaderStyle(wksHistory)
+    Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
     Call AutoFitColumnsWithPadding( _
         wksHistory.Range( _
-            wksHistory.Cells(1, 1), _
+            wksHistory.Cells(lngHeaderRow, 1), _
             wksHistory.Cells(lngExistingLastRow, OUTPUT_COLUMN_COUNT)).Columns, _
         2)
 
@@ -704,7 +790,9 @@ End Sub
 ' Returns:       ---
 ' Description:   Applies the standard output header style to a historical sheet.
 '-------------------------------------------------------------------------------
-Private Sub ApplyHistoricalHeaderStyle(ByVal wksHistory As Excel.Worksheet)
+Private Sub ApplyHistoricalHeaderStyle( _
+    ByVal wksHistory As Excel.Worksheet, _
+    ByVal lngHeaderRow As Long)
     Const METHOD_NAME As String = "ApplyHistoricalHeaderStyle"
     Dim errDescription As String
     Dim errNumber As Long
@@ -713,8 +801,8 @@ Private Sub ApplyHistoricalHeaderStyle(ByVal wksHistory As Excel.Worksheet)
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     Set rngHeader = wksHistory.Range( _
-        wksHistory.Cells(1, 1), _
-        wksHistory.Cells(1, OUTPUT_COLUMN_COUNT))
+        wksHistory.Cells(lngHeaderRow, 1), _
+        wksHistory.Cells(lngHeaderRow, OUTPUT_COLUMN_COUNT))
 
     With rngHeader
         .Font.Bold = True
