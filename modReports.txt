@@ -181,18 +181,19 @@ Public Sub CreateDailyReports( _
         arrCombined, strFileName, colDestinationRoots, _
         DateValue(dtRunTimestamp), strWorkspace, False, True)
 
-    arrUnknownData = FilterUnknownTransactions(arrCombined)
-
-    If UBound(arrUnknownData, 1) > 1 Then
-        strFileName = REPORT_UNKNOWN_PREFIX & strDateToken & "_" & strTimeToken & ".xlsx"
-        Call PublishReport( _
-            arrUnknownData, strFileName, colDestinationRoots, _
-            DateValue(dtRunTimestamp), strWorkspace, True, False)
-    End If
-
-    arrUnknownData = Empty
-
     If blnCreateTeamFiles Then
+        arrUnknownData = FilterUnknownTransactions(arrCombined)
+
+        If UBound(arrUnknownData, 1) > 1 Then
+            strFileName = REPORT_UNKNOWN_PREFIX & _
+                strDateToken & "_" & strTimeToken & ".xlsx"
+            Call PublishReport( _
+                arrUnknownData, strFileName, colDestinationRoots, _
+                DateValue(dtRunTimestamp), strWorkspace, True, False)
+        End If
+
+        arrUnknownData = Empty
+
         For lngTeam = 1 To colTeams.Count
             strTeam = CStr(colTeams(lngTeam))
             strTeamFilePart = SanitizeFileNamePart(strTeam)
@@ -296,7 +297,8 @@ Private Sub CreateReportWorkbook( _
     Dim errNumber As Long
     Dim handlerErrDescription As String
     Dim handlerErrNumber As Long
-    Dim lngLastRow As Long
+    Dim lngHeaderRow As Long
+    Dim lngLastSheetRow As Long
     Dim wkbOutput As Excel.Workbook
     Dim wksTransactions As Excel.Worksheet
 
@@ -307,19 +309,28 @@ Private Sub CreateReportWorkbook( _
     Set wksTransactions = wkbOutput.Worksheets(1)
     wksTransactions.Name = SHEET_TRANSACTIONS
 
-    lngLastRow = UBound(arrReport, 1)
-    wksTransactions.Range( _
-        wksTransactions.Cells(1, 1), _
-        wksTransactions.Cells(lngLastRow, OUTPUT_COLUMN_COUNT)).Value2 = arrReport
+    If blnCombinedReport Then
+        lngHeaderRow = COMBINED_TABLE_HEADER_ROW
+    Else
+        lngHeaderRow = 1
+    End If
 
-    Call FormatTransactionWorksheet(wksTransactions, lngLastRow)
+    lngLastSheetRow = lngHeaderRow + UBound(arrReport, 1) - 1
+    wksTransactions.Range( _
+        wksTransactions.Cells(lngHeaderRow, 1), _
+        wksTransactions.Cells( _
+            lngLastSheetRow, OUTPUT_COLUMN_COUNT)).Value2 = arrReport
+
+    Call FormatTransactionWorksheet( _
+        wksTransactions, lngHeaderRow, lngLastSheetRow)
 
     If blnCombinedReport Then
-        Call EnsureCombinedDashboard(wkbOutput, wksTransactions, lngLastRow)
+        Call EnsureCombinedDashboard( _
+            wkbOutput, wksTransactions, lngLastSheetRow)
     End If
 
     If blnUnknownReport Then
-        Call AddUnknownActionButtons(wksTransactions, lngLastRow)
+        Call AddUnknownActionButtons(wksTransactions, lngLastSheetRow)
     End If
 
     Call CopyStaticDataValues(wkbOutput)
@@ -423,7 +434,10 @@ End Sub
 ' Returns:       ---
 ' Description:   Applies stable report formatting without Select or Activate.
 '-------------------------------------------------------------------------------
-Private Sub FormatTransactionWorksheet(ByVal wksTransactions As Excel.Worksheet, ByVal lngLastRow As Long)
+Private Sub FormatTransactionWorksheet( _
+    ByVal wksTransactions As Excel.Worksheet, _
+    ByVal lngHeaderRow As Long, _
+    ByVal lngLastRow As Long)
     Const METHOD_NAME As String = "FormatTransactionWorksheet"
     Dim errDescription As String
     Dim errNumber As Long
@@ -432,12 +446,12 @@ Private Sub FormatTransactionWorksheet(ByVal wksTransactions As Excel.Worksheet,
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     Set rngTable = wksTransactions.Range( _
-        wksTransactions.Cells(1, 1), _
+        wksTransactions.Cells(lngHeaderRow, 1), _
         wksTransactions.Cells(lngLastRow, OUTPUT_COLUMN_COUNT))
 
     With wksTransactions.Range( _
-        wksTransactions.Cells(1, 1), _
-        wksTransactions.Cells(1, OUTPUT_COLUMN_COUNT))
+        wksTransactions.Cells(lngHeaderRow, 1), _
+        wksTransactions.Cells(lngHeaderRow, OUTPUT_COLUMN_COUNT))
 
         .Font.Bold = True
         .Font.Name = OUTPUT_HEADER_FONT_NAME
