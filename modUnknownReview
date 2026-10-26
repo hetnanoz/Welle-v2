@@ -215,7 +215,8 @@ Public Sub AssignUnknownTransactionFromButton()
 
         Set colDestinationRoots = BuildDestinationRoots(appConfig)
         strResultPaths = AddReviewedTransactionToHistorical( _
-            arrReviewed, strTeam, colDestinationRoots)
+            arrReviewed, strTeam, colDestinationRoots, _
+            appConfig.CreateTeamFiles)
 
         wksSource.Cells(lngRow, 5).Value2 = strTeam
         wksSource.Cells(lngRow, OUTPUT_TIMESTAMP_COLUMN).Value2 = Now
