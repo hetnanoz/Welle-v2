@@ -5,56 +5,6 @@ Private Const CLASS_NAME As String = "modUnknownReview"
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-21
-' Parameters:    arrCombined As Variant
-' Returns:       ---
-' Description:   Rebuilds the interactive Unknown Review sheet in the tool.
-'-------------------------------------------------------------------------------
-Public Sub PrepareUnknownReviewSheet(ByRef arrCombined As Variant)
-    Const METHOD_NAME As String = "PrepareUnknownReviewSheet"
-    Dim arrUnknown As Variant
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim lngLastRow As Long
-    Dim wksReview As Excel.Worksheet
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    Set wksReview = GetOrCreateUnknownReviewSheet()
-    Call ClearUnknownReviewSheet(wksReview)
-    arrUnknown = FilterUnknownTransactions(arrCombined)
-    lngLastRow = UBound(arrUnknown, 1)
-
-    wksReview.Range( _
-        wksReview.Cells(1, 1), _
-        wksReview.Cells(lngLastRow, OUTPUT_COLUMN_COUNT)).Value2 = arrUnknown
-
-    Call FormatUnknownReviewSheet(wksReview, lngLastRow)
-    Call AddUnknownActionButtons(wksReview, lngLastRow)
-
-    If lngLastRow = 1 Then
-        wksReview.Cells(2, 1).Value2 = _
-            "No unknown transactions are available for manual review."
-    End If
-
-    wksReview.Visible = xlSheetVisible
-
-ExitPoint:
-    Set wksReview = Nothing
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Sub
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-21
 ' Parameters:    Target worksheet and last transaction row.
 ' Returns:       ---
 ' Description:   Adds desktop Excel ADD buttons for assignable unknown-Team rows.
@@ -75,9 +25,9 @@ Public Sub AddUnknownActionButtons( _
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     Call DeleteUnknownActionButtons(wksTarget)
-    wksTarget.Cells(1, UNKNOWN_REVIEW_ACTION_COLUMN).Value2 = "ACTION"
+    wksTarget.Cells(1, UNKNOWN_ACTION_COLUMN).Value2 = "ACTION"
 
-    With wksTarget.Cells(1, UNKNOWN_REVIEW_ACTION_COLUMN)
+    With wksTarget.Cells(1, UNKNOWN_ACTION_COLUMN)
         .Font.Bold = True
         .Font.Name = OUTPUT_HEADER_FONT_NAME
         .Font.Size = OUTPUT_HEADER_FONT_SIZE
@@ -85,12 +35,12 @@ Public Sub AddUnknownActionButtons( _
         .Interior.Color = OUTPUT_HEADER_FILL_COLOR
     End With
 
-    wksTarget.Columns(UNKNOWN_REVIEW_ACTION_COLUMN).ColumnWidth = 16
+    wksTarget.Columns(UNKNOWN_ACTION_COLUMN).ColumnWidth = 16
 
     For lngRow = 2 To lngLastRow
         strFund = Trim$(CStr(wksTarget.Cells(lngRow, 1).Value2))
         strTeam = Trim$(CStr(wksTarget.Cells(lngRow, 5).Value2))
-        Set rngButtonCell = wksTarget.Cells(lngRow, UNKNOWN_REVIEW_ACTION_COLUMN)
+        Set rngButtonCell = wksTarget.Cells(lngRow, UNKNOWN_ACTION_COLUMN)
 
         If StrComp(strFund, "UNKNOWN FUND", vbTextCompare) = 0 Then
             rngButtonCell.Value2 = "MAP FUND FIRST"
@@ -221,7 +171,7 @@ Public Sub AssignUnknownTransactionFromButton()
         wksSource.Cells(lngRow, 5).Value2 = strTeam
         wksSource.Cells(lngRow, OUTPUT_TIMESTAMP_COLUMN).Value2 = Now
         wksSource.Cells(lngRow, OUTPUT_USER_ID_COLUMN).Value2 = strUserId
-        wksSource.Cells(lngRow, UNKNOWN_REVIEW_ACTION_COLUMN).Value2 = "ADDED"
+        wksSource.Cells(lngRow, UNKNOWN_ACTION_COLUMN).Value2 = "ADDED"
 
         With wksSource.Range( _
             wksSource.Cells(lngRow, 1), _
@@ -290,7 +240,7 @@ Private Function BuildUnknownButtonName( _
     strToken = Left$(strToken, 120)
 
     BuildUnknownButtonName = _
-        UNKNOWN_REVIEW_BUTTON_PREFIX & strToken & "_" & CStr(lngRow)
+        UNKNOWN_ACTION_BUTTON_PREFIX & strToken & "_" & CStr(lngRow)
 
 ExitPoint:
     If errNumber <> 0 Then
@@ -312,7 +262,7 @@ End Function
 ' Creation date: 2026-10-21
 ' Parameters:    Caller shape name and source-sheet output reference.
 ' Returns:       Excel.Shape
-' Description:   Finds the clicked ADD button without using ActiveSheet.
+' Description:   Finds the clicked ADD button without relying on the active worksheet.
 '-------------------------------------------------------------------------------
 Private Function FindCallerShape( _
     ByVal strCallerName As String, _
@@ -441,84 +391,6 @@ End Function
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-21
-' Parameters:    ---
-' Returns:       Excel.Worksheet
-' Description:   Returns or creates the internal Unknown Review worksheet.
-'-------------------------------------------------------------------------------
-Private Function GetOrCreateUnknownReviewSheet() As Excel.Worksheet
-    Const METHOD_NAME As String = "GetOrCreateUnknownReviewSheet"
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim wksCandidate As Excel.Worksheet
-    Dim wksResult As Excel.Worksheet
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    For Each wksCandidate In ThisWorkbook.Worksheets
-        If StrComp( _
-            wksCandidate.Name, SHEET_UNKNOWN_REVIEW, vbTextCompare) = 0 Then
-
-            Set wksResult = wksCandidate
-            Exit For
-        End If
-    Next wksCandidate
-
-    If wksResult Is Nothing Then
-        Set wksResult = ThisWorkbook.Worksheets.Add( _
-            After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
-        wksResult.Name = SHEET_UNKNOWN_REVIEW
-    End If
-
-ExitPoint:
-    Set wksCandidate = Nothing
-    If errNumber = 0 Then Set GetOrCreateUnknownReviewSheet = wksResult
-    Set wksResult = Nothing
-
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Function
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Function
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-21
-' Parameters:    wksReview As Excel.Worksheet
-' Returns:       ---
-' Description:   Clears prior review values and generated ADD buttons.
-'-------------------------------------------------------------------------------
-Private Sub ClearUnknownReviewSheet(ByVal wksReview As Excel.Worksheet)
-    Const METHOD_NAME As String = "ClearUnknownReviewSheet"
-    Dim errDescription As String
-    Dim errNumber As Long
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    Call DeleteUnknownActionButtons(wksReview)
-    wksReview.Cells.Clear
-
-ExitPoint:
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Sub
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-21
 ' Parameters:    wksTarget As Excel.Worksheet
 ' Returns:       ---
 ' Description:   Deletes only ADD buttons generated by this tool.
@@ -534,7 +406,7 @@ Private Sub DeleteUnknownActionButtons(ByVal wksTarget As Excel.Worksheet)
     For lngShape = wksTarget.Shapes.Count To 1 Step -1
         If InStr( _
             1, wksTarget.Shapes(lngShape).Name, _
-            UNKNOWN_REVIEW_BUTTON_PREFIX, vbTextCompare) = 1 Then
+            UNKNOWN_ACTION_BUTTON_PREFIX, vbTextCompare) = 1 Then
 
             wksTarget.Shapes(lngShape).Delete
         End If
@@ -550,72 +422,5 @@ ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Sub
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-21
-' Parameters:    Review worksheet and last transaction row.
-' Returns:       ---
-' Description:   Formats the internal Unknown Review table.
-'-------------------------------------------------------------------------------
-Private Sub FormatUnknownReviewSheet( _
-    ByVal wksReview As Excel.Worksheet, _
-    ByVal lngLastRow As Long)
-
-    Const METHOD_NAME As String = "FormatUnknownReviewSheet"
-    Const MAX_COLUMN_WIDTH As Double = 255
-    Dim dblWidth As Double
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim lngColumn As Long
-    Dim rngTable As Excel.Range
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    Set rngTable = wksReview.Range( _
-        wksReview.Cells(1, 1), _
-        wksReview.Cells(lngLastRow, OUTPUT_COLUMN_COUNT))
-
-    With wksReview.Range( _
-        wksReview.Cells(1, 1), _
-        wksReview.Cells(1, OUTPUT_COLUMN_COUNT))
-
-        .Font.Bold = True
-        .Font.Name = OUTPUT_HEADER_FONT_NAME
-        .Font.Size = OUTPUT_HEADER_FONT_SIZE
-        .Font.Color = OUTPUT_HEADER_FONT_COLOR
-        .Interior.Color = OUTPUT_HEADER_FILL_COLOR
-        .WrapText = True
-    End With
-
-    Call rngTable.AutoFilter
-    wksReview.Columns("C:D").NumberFormat = "dd.mm.yyyy"
-    wksReview.Columns("H:I").NumberFormat = "dd.mm.yyyy"
-    wksReview.Columns("R:S").NumberFormat = "#,##0.00"
-    wksReview.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
-    wksReview.Columns("W:W").NumberFormat = "@"
-    Call rngTable.Columns.AutoFit
-
-    For lngColumn = 1 To OUTPUT_COLUMN_COUNT
-        dblWidth = wksReview.Columns(lngColumn).ColumnWidth + 2
-        If dblWidth > MAX_COLUMN_WIDTH Then dblWidth = MAX_COLUMN_WIDTH
-        wksReview.Columns(lngColumn).ColumnWidth = dblWidth
-    Next lngColumn
-
-ExitPoint:
-    Set rngTable = Nothing
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "lastRow", lngLastRow)
     GoTo ExitPoint
 End Sub
