@@ -22,6 +22,7 @@ Public Sub EnsureCombinedDashboard( _
     Dim scTeam As Excel.SlicerCache
     Dim slFund As Excel.Slicer
     Dim slTeam As Excel.Slicer
+    Dim strStage As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
@@ -35,24 +36,31 @@ Public Sub EnsureCombinedDashboard( _
         lngLastRow = COMBINED_TABLE_HEADER_ROW
     End If
 
+    strStage = "delete existing slicers"
     Call DeleteOwnedSlicerCaches(wkbTarget)
+
+    strStage = "delete legacy dashboard"
     Call DeleteLegacyDashboardSheet(wkbTarget)
+
+    strStage = "reset slicer area"
     Call ResetCombinedFilterArea(wksTransactions)
+
+    strStage = "create or resize transaction table"
     Set lstTransactions = EnsureTransactionsTable(wksTransactions, lngLastRow)
 
-    Set scTeam = wkbTarget.SlicerCaches.Add2( _
-        Source:=lstTransactions, SourceField:="Team")
-    Set slTeam = scTeam.Slicers.Add( _
-        SlicerDestination:=wksTransactions.Name, _
-        Name:=SLICER_TEAM_NAME, Caption:="Team", _
-        Top:=8, Left:=8, Width:=180, Height:=125)
+    strStage = "create Team slicer cache"
+    Set scTeam = wkbTarget.SlicerCaches.Add2(lstTransactions, "Team")
 
-    Set scFund = wkbTarget.SlicerCaches.Add2( _
-        Source:=lstTransactions, SourceField:="MF")
+    strStage = "create Team slicer"
+    Set slTeam = scTeam.Slicers.Add( _
+        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 180, 125)
+
+    strStage = "create Fund slicer cache"
+    Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
+
+    strStage = "create Fund slicer"
     Set slFund = scFund.Slicers.Add( _
-        SlicerDestination:=wksTransactions.Name, _
-        Name:=SLICER_FUND_NAME, Caption:="Fund", _
-        Top:=8, Left:=205, Width:=220, Height:=125)
+        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 205, 220, 125)
 
     With slTeam
         .DisplayHeader = True
@@ -82,8 +90,10 @@ ExitPoint:
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
+    errDescription = "Dashboard stage: " & strStage & ". " & errDescription
     Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "stage", strStage)
     GoTo ExitPoint
 End Sub
 
@@ -290,17 +300,12 @@ Private Sub DeleteOwnedSlicerCaches(ByVal wkbTarget As Excel.Workbook)
 
             blnDeleteCache = True
         ElseIf scCandidate.List Then
-            If StrComp( _
-                scCandidate.ListObject.Name, _
-                TRANSACTIONS_TABLE_NAME, vbTextCompare) = 0 Then
+            strSourceName = scCandidate.SourceName
 
-                strSourceName = scCandidate.SourceName
+            If StrComp(strSourceName, "Team", vbTextCompare) = 0 Or _
+                StrComp(strSourceName, "MF", vbTextCompare) = 0 Then
 
-                If StrComp(strSourceName, "Team", vbTextCompare) = 0 Or _
-                    StrComp(strSourceName, "MF", vbTextCompare) = 0 Then
-
-                    blnDeleteCache = True
-                End If
+                blnDeleteCache = True
             End If
         End If
 
