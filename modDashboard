@@ -1,0 +1,288 @@
+Option Explicit
+
+Private Const CLASS_NAME As String = "modDashboard"
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    Workbook, Transactions worksheet and last transaction row.
+' Returns:       ---
+' Description:   Creates the Team/Fund slicer dashboard for Combined workbooks.
+'-------------------------------------------------------------------------------
+Public Sub EnsureCombinedDashboard( _
+    ByVal wkbTarget As Excel.Workbook, _
+    ByVal wksTransactions As Excel.Worksheet, _
+    ByVal lngLastRow As Long)
+
+    Const METHOD_NAME As String = "EnsureCombinedDashboard"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lstTransactions As Excel.ListObject
+    Dim scFund As Excel.SlicerCache
+    Dim scTeam As Excel.SlicerCache
+    Dim slFund As Excel.Slicer
+    Dim slTeam As Excel.Slicer
+    Dim wksDashboard As Excel.Worksheet
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If wkbTarget Is Nothing Or wksTransactions Is Nothing Then
+        Call VBA.Err.Raise( _
+            ERROR_OUTPUT, METHOD_NAME, _
+            "Combined dashboard workbook or worksheet is not available.")
+    End If
+
+    If lngLastRow < 1 Then lngLastRow = 1
+
+    Set lstTransactions = EnsureTransactionsTable(wksTransactions, lngLastRow)
+    Call DeleteOwnedSlicerCaches(wkbTarget)
+    Set wksDashboard = GetOrCreateDashboardSheet(wkbTarget)
+    Call ResetDashboardSheet(wksDashboard)
+
+    Set scTeam = wkbTarget.SlicerCaches.Add2( _
+        lstTransactions, "Team", SLICER_CACHE_TEAM_NAME)
+    Set slTeam = scTeam.Slicers.Add( _
+        wksDashboard, , SLICER_TEAM_NAME, "Team", 50, 25, 180, 260)
+
+    Set scFund = wkbTarget.SlicerCaches.Add2( _
+        lstTransactions, "MF", SLICER_CACHE_FUND_NAME)
+    Set slFund = scFund.Slicers.Add( _
+        wksDashboard, , SLICER_FUND_NAME, "Fund", 50, 225, 220, 260)
+
+    With slTeam
+        .DisplayHeader = True
+        .NumberOfColumns = 1
+        .Locked = True
+    End With
+
+    With slFund
+        .DisplayHeader = True
+        .NumberOfColumns = 1
+        .Locked = True
+    End With
+
+    wksDashboard.Move Before:=wkbTarget.Worksheets(1)
+
+ExitPoint:
+    Set slFund = Nothing
+    Set slTeam = Nothing
+    Set scFund = Nothing
+    Set scTeam = Nothing
+    Set lstTransactions = Nothing
+    Set wksDashboard = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    Transactions worksheet and last transaction row.
+' Returns:       Excel.ListObject
+' Description:   Creates or resizes the canonical Transactions Excel table.
+'-------------------------------------------------------------------------------
+Private Function EnsureTransactionsTable( _
+    ByVal wksTransactions As Excel.Worksheet, _
+    ByVal lngLastRow As Long) As Excel.ListObject
+
+    Const METHOD_NAME As String = "EnsureTransactionsTable"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lstCandidate As Excel.ListObject
+    Dim lstResult As Excel.ListObject
+    Dim rngTable As Excel.Range
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set rngTable = wksTransactions.Range( _
+        wksTransactions.Cells(1, 1), _
+        wksTransactions.Cells(lngLastRow, OUTPUT_COLUMN_COUNT))
+
+    For Each lstCandidate In wksTransactions.ListObjects
+        If StrComp( _
+            lstCandidate.Name, TRANSACTIONS_TABLE_NAME, vbTextCompare) = 0 Then
+
+            Set lstResult = lstCandidate
+            Exit For
+        End If
+    Next lstCandidate
+
+    If lstResult Is Nothing Then
+        If wksTransactions.AutoFilterMode Then
+            wksTransactions.AutoFilterMode = False
+        End If
+
+        Set lstResult = wksTransactions.ListObjects.Add( _
+            xlSrcRange, rngTable, , xlYes)
+        lstResult.Name = TRANSACTIONS_TABLE_NAME
+    Else
+        Call lstResult.Resize(rngTable)
+    End If
+
+    lstResult.ShowTableStyleRowStripes = False
+    lstResult.ShowTableStyleFirstColumn = False
+    lstResult.ShowTableStyleLastColumn = False
+
+    With lstResult.HeaderRowRange
+        .Font.Bold = True
+        .Font.Name = OUTPUT_HEADER_FONT_NAME
+        .Font.Size = OUTPUT_HEADER_FONT_SIZE
+        .Font.Color = OUTPUT_HEADER_FONT_COLOR
+        .Interior.Color = OUTPUT_HEADER_FILL_COLOR
+        .WrapText = True
+    End With
+
+ExitPoint:
+    Set lstCandidate = Nothing
+    Set rngTable = Nothing
+    If errNumber = 0 Then Set EnsureTransactionsTable = lstResult
+    Set lstResult = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "lastRow", lngLastRow)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    wkbTarget As Excel.Workbook
+' Returns:       Excel.Worksheet
+' Description:   Returns the Dashboard worksheet or creates it when missing.
+'-------------------------------------------------------------------------------
+Private Function GetOrCreateDashboardSheet( _
+    ByVal wkbTarget As Excel.Workbook) As Excel.Worksheet
+
+    Const METHOD_NAME As String = "GetOrCreateDashboardSheet"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim wksCandidate As Excel.Worksheet
+    Dim wksResult As Excel.Worksheet
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each wksCandidate In wkbTarget.Worksheets
+        If StrComp( _
+            wksCandidate.Name, SHEET_DASHBOARD, vbTextCompare) = 0 Then
+
+            Set wksResult = wksCandidate
+            Exit For
+        End If
+    Next wksCandidate
+
+    If wksResult Is Nothing Then
+        Set wksResult = wkbTarget.Worksheets.Add( _
+            Before:=wkbTarget.Worksheets(1))
+        wksResult.Name = SHEET_DASHBOARD
+    End If
+
+ExitPoint:
+    Set wksCandidate = Nothing
+    If errNumber = 0 Then Set GetOrCreateDashboardSheet = wksResult
+    Set wksResult = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    wksDashboard As Excel.Worksheet
+' Returns:       ---
+' Description:   Resets the Dashboard surface before slicers are recreated.
+'-------------------------------------------------------------------------------
+Private Sub ResetDashboardSheet(ByVal wksDashboard As Excel.Worksheet)
+    Const METHOD_NAME As String = "ResetDashboardSheet"
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    wksDashboard.Cells.Clear
+    wksDashboard.Cells.Font.Name = OUTPUT_HEADER_FONT_NAME
+    wksDashboard.Cells.Font.Size = OUTPUT_HEADER_FONT_SIZE
+    wksDashboard.Range("A1").Value2 = "Dallas Cash Transactions - Filters"
+    wksDashboard.Range("A1").Font.Bold = True
+    wksDashboard.Range("A1").Font.Size = 14
+    wksDashboard.Columns("A:H").ColumnWidth = 14
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    wkbTarget As Excel.Workbook
+' Returns:       ---
+' Description:   Deletes only slicer caches owned by this Dallas dashboard.
+'-------------------------------------------------------------------------------
+Private Sub DeleteOwnedSlicerCaches(ByVal wkbTarget As Excel.Workbook)
+    Const METHOD_NAME As String = "DeleteOwnedSlicerCaches"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngIndex As Long
+    Dim strCacheName As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For lngIndex = wkbTarget.SlicerCaches.Count To 1 Step -1
+        strCacheName = wkbTarget.SlicerCaches(lngIndex).Name
+
+        If StrComp( _
+            strCacheName, SLICER_CACHE_TEAM_NAME, vbTextCompare) = 0 Or _
+            StrComp( _
+                strCacheName, SLICER_CACHE_FUND_NAME, vbTextCompare) = 0 Then
+
+            Call wkbTarget.SlicerCaches(lngIndex).Delete
+        End If
+    Next lngIndex
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
