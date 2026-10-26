@@ -107,11 +107,15 @@ Public Sub RunDallasCashTransactions()
         colAttachmentPaths, colDestinationRoots, DateValue(dtRunTimestamp), strInputFolder)
 
     Application.StatusBar = "Dallas Cash Transactions: creating daily reports..."
-    Call CreateDailyReports(arrCombined, colTeams, colDestinationRoots, dtRunTimestamp, strStageWorkspace)
+    Call CreateDailyReports( _
+        arrCombined, colTeams, colDestinationRoots, dtRunTimestamp, _
+        strStageWorkspace, appConfig.CreateTeamFiles)
 
     If appConfig.UpdateHistorical Then
         Application.StatusBar = "Dallas Cash Transactions: updating historical master files..."
-        Call UpdateHistoricalFiles(arrCombined, colTeams, colDestinationRoots)
+        Call UpdateHistoricalFiles( _
+            arrCombined, colTeams, colDestinationRoots, _
+            appConfig.CreateTeamFiles)
     End If
 
     Application.StatusBar = "Dallas Cash Transactions: preparing Unknown Review..."
