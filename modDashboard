@@ -53,24 +53,24 @@ Public Sub EnsureCombinedDashboard( _
 
     strStage = "create Team slicer"
     Set slTeam = scTeam.Slicers.Add( _
-        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 180, 125)
+        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 360, 125)
 
     strStage = "create Fund slicer cache"
     Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
 
     strStage = "create Fund slicer"
     Set slFund = scFund.Slicers.Add( _
-        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 205, 220, 125)
+        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 385, 520, 125)
 
     With slTeam
         .DisplayHeader = True
-        .NumberOfColumns = 1
+        .NumberOfColumns = 2
         .Locked = True
     End With
 
     With slFund
         .DisplayHeader = True
-        .NumberOfColumns = 1
+        .NumberOfColumns = 3
         .Locked = True
     End With
 
@@ -142,6 +142,7 @@ Private Function EnsureTransactionsTable( _
         Call lstResult.Resize(rngTable)
     End If
 
+    lstResult.ShowHeaders = True
     lstResult.ShowTableStyleRowStripes = False
     lstResult.ShowTableStyleFirstColumn = False
     lstResult.ShowTableStyleLastColumn = False
@@ -328,3 +329,4 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Sub
+
