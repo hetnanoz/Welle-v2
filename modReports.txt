@@ -1,4 +1,3 @@
-
 Option Explicit
 
 Private Const CLASS_NAME As String = "modReports"
@@ -148,16 +147,17 @@ End Sub
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
-' Parameters:    Combined data, Teams, output roots, run timestamp and workspace.
+' Parameters:    Combined data, Teams, roots, timestamp, workspace and Team-file flag.
 ' Returns:       ---
-' Description:   Creates combined, unknown-fund, and per-team daily reports.
+' Description:   Creates Combined/Unknown daily reports and optional per-Team files.
 '-------------------------------------------------------------------------------
 Public Sub CreateDailyReports( _
     ByRef arrCombined As Variant, _
     ByVal colTeams As Collection, _
     ByVal colDestinationRoots As Collection, _
     ByVal dtRunTimestamp As Date, _
-    ByVal strWorkspace As String)
+    ByVal strWorkspace As String, _
+    ByVal blnCreateTeamFiles As Boolean)
     Const METHOD_NAME As String = "CreateDailyReports"
     Dim arrTeamData As Variant
     Dim arrUnknownData As Variant
@@ -179,7 +179,7 @@ Public Sub CreateDailyReports( _
     strFileName = REPORT_COMBINED_PREFIX & strDateToken & "_" & strTimeToken & ".xlsx"
     Call PublishReport( _
         arrCombined, strFileName, colDestinationRoots, _
-        DateValue(dtRunTimestamp), strWorkspace, False)
+        DateValue(dtRunTimestamp), strWorkspace, False, True)
 
     arrUnknownData = FilterUnknownTransactions(arrCombined)
 
@@ -187,29 +187,32 @@ Public Sub CreateDailyReports( _
         strFileName = REPORT_UNKNOWN_PREFIX & strDateToken & "_" & strTimeToken & ".xlsx"
         Call PublishReport( _
             arrUnknownData, strFileName, colDestinationRoots, _
-            DateValue(dtRunTimestamp), strWorkspace, True)
+            DateValue(dtRunTimestamp), strWorkspace, True, False)
     End If
 
     arrUnknownData = Empty
 
-    For lngTeam = 1 To colTeams.Count
-        strTeam = CStr(colTeams(lngTeam))
-        strTeamFilePart = SanitizeFileNamePart(strTeam)
-        arrTeamData = FilterTransactionsByTeam(arrCombined, strTeam)
-        blnEmpty = UBound(arrTeamData, 1) = 1
+    If blnCreateTeamFiles Then
+        For lngTeam = 1 To colTeams.Count
+            strTeam = CStr(colTeams(lngTeam))
+            strTeamFilePart = SanitizeFileNamePart(strTeam)
+            arrTeamData = FilterTransactionsByTeam(arrCombined, strTeam)
+            blnEmpty = UBound(arrTeamData, 1) = 1
 
-        If (Not blnEmpty) Or SAVE_EMPTY_DAILY_TEAM_REPORTS Then
-            strFileName = REPORT_TEAM_PREFIX & strTeamFilePart & "_" & strDateToken & "_" & strTimeToken
-            If blnEmpty Then strFileName = strFileName & "_EMPTY"
-            strFileName = strFileName & ".xlsx"
+            If (Not blnEmpty) Or SAVE_EMPTY_DAILY_TEAM_REPORTS Then
+                strFileName = REPORT_TEAM_PREFIX & strTeamFilePart & "_" & _
+                    strDateToken & "_" & strTimeToken
+                If blnEmpty Then strFileName = strFileName & "_EMPTY"
+                strFileName = strFileName & ".xlsx"
 
-            Call PublishReport( _
-                arrTeamData, strFileName, colDestinationRoots, _
-                DateValue(dtRunTimestamp), strWorkspace, False)
-        End If
+                Call PublishReport( _
+                    arrTeamData, strFileName, colDestinationRoots, _
+                    DateValue(dtRunTimestamp), strWorkspace, False, False)
+            End If
 
-        arrTeamData = Empty
-    Next lngTeam
+            arrTeamData = Empty
+        Next lngTeam
+    End If
 
 ExitPoint:
     If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
@@ -237,7 +240,8 @@ Private Sub PublishReport( _
     ByVal colDestinationRoots As Collection, _
     ByVal dtReportDate As Date, _
     ByVal strWorkspace As String, _
-    ByVal blnUnknownReport As Boolean)
+    ByVal blnUnknownReport As Boolean, _
+    ByVal blnCombinedReport As Boolean)
     Const METHOD_NAME As String = "PublishReport"
     Dim errDescription As String
     Dim errNumber As Long
@@ -249,7 +253,8 @@ Private Sub PublishReport( _
 
     strStagePath = CombinePath(strWorkspace, strFileName)
     Call DeleteFileIfExists(strStagePath)
-    Call CreateReportWorkbook(arrReport, strStagePath, blnUnknownReport)
+    Call CreateReportWorkbook( _
+        arrReport, strStagePath, blnUnknownReport, blnCombinedReport)
 
     For lngRoot = 1 To colDestinationRoots.Count
         strDailyFolder = BuildDatedFolderPath(CStr(colDestinationRoots(lngRoot)), dtReportDate)
@@ -282,7 +287,8 @@ End Sub
 Private Sub CreateReportWorkbook( _
     ByRef arrReport As Variant, _
     ByVal strStagePath As String, _
-    ByVal blnUnknownReport As Boolean)
+    ByVal blnUnknownReport As Boolean, _
+    ByVal blnCombinedReport As Boolean)
     Const METHOD_NAME As String = "CreateReportWorkbook"
     Dim blnCloseRequired As Boolean
     Dim cleanupErrNumber As Long
@@ -307,6 +313,10 @@ Private Sub CreateReportWorkbook( _
         wksTransactions.Cells(lngLastRow, OUTPUT_COLUMN_COUNT)).Value2 = arrReport
 
     Call FormatTransactionWorksheet(wksTransactions, lngLastRow)
+
+    If blnCombinedReport Then
+        Call EnsureCombinedDashboard(wkbOutput, wksTransactions, lngLastRow)
+    End If
 
     If blnUnknownReport Then
         Call AddUnknownActionButtons(wksTransactions, lngLastRow)
