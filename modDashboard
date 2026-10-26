@@ -41,14 +41,18 @@ Public Sub EnsureCombinedDashboard( _
     Set lstTransactions = EnsureTransactionsTable(wksTransactions, lngLastRow)
 
     Set scTeam = wkbTarget.SlicerCaches.Add2( _
-        lstTransactions, "Team", SLICER_CACHE_TEAM_NAME)
+        Source:=lstTransactions, SourceField:="Team")
     Set slTeam = scTeam.Slicers.Add( _
-        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 180, 125)
+        SlicerDestination:=wksTransactions.Name, _
+        Name:=SLICER_TEAM_NAME, Caption:="Team", _
+        Top:=8, Left:=8, Width:=180, Height:=125)
 
     Set scFund = wkbTarget.SlicerCaches.Add2( _
-        lstTransactions, "MF", SLICER_CACHE_FUND_NAME)
+        Source:=lstTransactions, SourceField:="MF")
     Set slFund = scFund.Slicers.Add( _
-        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 205, 220, 125)
+        SlicerDestination:=wksTransactions.Name, _
+        Name:=SLICER_FUND_NAME, Caption:="Fund", _
+        Top:=8, Left:=205, Width:=220, Height:=125)
 
     With slTeam
         .DisplayHeader = True
@@ -264,26 +268,48 @@ End Sub
 '-------------------------------------------------------------------------------
 Private Sub DeleteOwnedSlicerCaches(ByVal wkbTarget As Excel.Workbook)
     Const METHOD_NAME As String = "DeleteOwnedSlicerCaches"
+    Dim blnDeleteCache As Boolean
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngIndex As Long
+    Dim scCandidate As Excel.SlicerCache
     Dim strCacheName As String
+    Dim strSourceName As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     For lngIndex = wkbTarget.SlicerCaches.Count To 1 Step -1
-        strCacheName = wkbTarget.SlicerCaches(lngIndex).Name
+        Set scCandidate = wkbTarget.SlicerCaches(lngIndex)
+        blnDeleteCache = False
+        strCacheName = scCandidate.Name
 
         If StrComp( _
             strCacheName, SLICER_CACHE_TEAM_NAME, vbTextCompare) = 0 Or _
             StrComp( _
                 strCacheName, SLICER_CACHE_FUND_NAME, vbTextCompare) = 0 Then
 
-            Call wkbTarget.SlicerCaches(lngIndex).Delete
+            blnDeleteCache = True
+        ElseIf scCandidate.List Then
+            If StrComp( _
+                scCandidate.ListObject.Name, _
+                TRANSACTIONS_TABLE_NAME, vbTextCompare) = 0 Then
+
+                strSourceName = scCandidate.SourceName
+
+                If StrComp(strSourceName, "Team", vbTextCompare) = 0 Or _
+                    StrComp(strSourceName, "MF", vbTextCompare) = 0 Then
+
+                    blnDeleteCache = True
+                End If
+            End If
         End If
+
+        If blnDeleteCache Then Call scCandidate.Delete
+        Set scCandidate = Nothing
     Next lngIndex
 
 ExitPoint:
+    Set scCandidate = Nothing
     If errNumber <> 0 Then
         Call VBA.Err.Raise( _
             errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
