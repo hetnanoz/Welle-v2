@@ -275,7 +275,8 @@ Private Sub UpdateHistoricalWorkbook( _
         blnLayoutUpgraded Or blnDashboardUpdated Then
 
         Call ApplyWorkbookSensitivityLabel(wkbHistory)
-        Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
+        Call SaveHistoricalWorkbookProtected( _
+            wkbHistory, strHistoricalPath, blnNewWorkbook)
     End If
 
 ExitPoint:
@@ -751,7 +752,8 @@ Private Sub UpsertReviewedTransaction( _
     End If
 
     Call ApplyWorkbookSensitivityLabel(wkbHistory)
-    Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
+    Call SaveHistoricalWorkbookProtected( _
+            wkbHistory, strHistoricalPath, blnNewWorkbook)
 
 ExitPoint:
     Set wksHistory = Nothing
@@ -830,13 +832,14 @@ End Sub
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-21
-' Parameters:    Workbook and target historical path.
+' Parameters:    Workbook, target historical path and new-workbook flag.
 ' Returns:       ---
-' Description:   Saves a historical workbook with write-reservation protection.
+' Description:   Saves existing history in place and protects new history on first SaveAs.
 '-------------------------------------------------------------------------------
 Private Sub SaveHistoricalWorkbookProtected( _
     ByVal wkbHistory As Excel.Workbook, _
-    ByVal strHistoricalPath As String)
+    ByVal strHistoricalPath As String, _
+    ByVal blnNewWorkbook As Boolean)
 
     Const METHOD_NAME As String = "SaveHistoricalWorkbookProtected"
     Dim blnPreviousDisplayAlerts As Boolean
@@ -848,11 +851,15 @@ Private Sub SaveHistoricalWorkbookProtected( _
     blnPreviousDisplayAlerts = Application.DisplayAlerts
     Application.DisplayAlerts = False
 
-    Call wkbHistory.SaveAs( _
-        Filename:=strHistoricalPath, FileFormat:=xlOpenXMLWorkbook, _
-        WriteResPassword:=OUTPUT_WRITE_PASSWORD, _
-        ReadOnlyRecommended:=True, CreateBackup:=False, _
-        AddToMru:=False, Local:=True)
+    If blnNewWorkbook Then
+        Call wkbHistory.SaveAs( _
+            Filename:=strHistoricalPath, FileFormat:=xlOpenXMLWorkbook, _
+            WriteResPassword:=OUTPUT_WRITE_PASSWORD, _
+            ReadOnlyRecommended:=True, CreateBackup:=False, _
+            AddToMru:=False, Local:=True)
+    ElseIf Not wkbHistory.Saved Then
+        Call wkbHistory.Save
+    End If
 
 ExitPoint:
     Application.DisplayAlerts = blnPreviousDisplayAlerts
@@ -910,4 +917,5 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "padding", dblPadding)
     GoTo ExitPoint
 End Sub
+
 
