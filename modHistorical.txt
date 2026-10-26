@@ -5,14 +5,15 @@ Private Const CLASS_NAME As String = "modHistorical"
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
-' Parameters:    Combined data, configured Teams and enabled destination roots.
+' Parameters:    Combined data, Teams, roots and per-Team file flag.
 ' Returns:       ---
-' Description:   Updates combined, unknown-fund, and per-team historical master workbooks.
+' Description:   Updates Combined/Unknown masters and optional per-Team masters.
 '-------------------------------------------------------------------------------
 Public Sub UpdateHistoricalFiles( _
     ByRef arrCombined As Variant, _
     ByVal colTeams As Collection, _
-    ByVal colDestinationRoots As Collection)
+    ByVal colDestinationRoots As Collection, _
+    ByVal blnCreateTeamFiles As Boolean)
     Const METHOD_NAME As String = "UpdateHistoricalFiles"
     Dim arrTeamData As Variant
     Dim arrUnknownData As Variant
@@ -31,7 +32,7 @@ Public Sub UpdateHistoricalFiles( _
         For lngRoot = 1 To colDestinationRoots.Count
             strRootPath = CStr(colDestinationRoots(lngRoot))
             strHistoricalPath = CombinePath(strRootPath, HISTORICAL_COMBINED_FILE)
-            Call UpdateHistoricalWorkbook(strHistoricalPath, arrCombined)
+            Call UpdateHistoricalWorkbook(strHistoricalPath, arrCombined, True)
         Next lngRoot
     End If
 
@@ -41,28 +42,32 @@ Public Sub UpdateHistoricalFiles( _
         For lngRoot = 1 To colDestinationRoots.Count
             strRootPath = CStr(colDestinationRoots(lngRoot))
             strHistoricalPath = CombinePath(strRootPath, HISTORICAL_UNKNOWN_FILE)
-            Call UpdateHistoricalWorkbook(strHistoricalPath, arrUnknownData)
+            Call UpdateHistoricalWorkbook(strHistoricalPath, arrUnknownData, False)
         Next lngRoot
     End If
 
     arrUnknownData = Empty
 
-    For lngTeam = 1 To colTeams.Count
-        strTeam = CStr(colTeams(lngTeam))
-        strTeamFilePart = SanitizeFileNamePart(strTeam)
-        arrTeamData = FilterTransactionsByTeam(arrCombined, strTeam)
+    If blnCreateTeamFiles Then
+        For lngTeam = 1 To colTeams.Count
+            strTeam = CStr(colTeams(lngTeam))
+            strTeamFilePart = SanitizeFileNamePart(strTeam)
+            arrTeamData = FilterTransactionsByTeam(arrCombined, strTeam)
 
-        If UBound(arrTeamData, 1) > 1 Then
-            For lngRoot = 1 To colDestinationRoots.Count
-                strRootPath = CStr(colDestinationRoots(lngRoot))
-                strHistoricalPath = CombinePath( _
-                    strRootPath, HISTORICAL_TEAM_PREFIX & strTeamFilePart & ".xlsx")
-                Call UpdateHistoricalWorkbook(strHistoricalPath, arrTeamData)
-            Next lngRoot
-        End If
+            If UBound(arrTeamData, 1) > 1 Then
+                For lngRoot = 1 To colDestinationRoots.Count
+                    strRootPath = CStr(colDestinationRoots(lngRoot))
+                    strHistoricalPath = CombinePath( _
+                        strRootPath, HISTORICAL_TEAM_PREFIX & _
+                        strTeamFilePart & ".xlsx")
+                    Call UpdateHistoricalWorkbook( _
+                        strHistoricalPath, arrTeamData, False)
+                Next lngRoot
+            End If
 
-        arrTeamData = Empty
-    Next lngTeam
+            arrTeamData = Empty
+        Next lngTeam
+    End If
 
 ExitPoint:
     If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
@@ -84,12 +89,16 @@ End Sub
 ' Returns:       ---
 ' Description:   Appends only unseen records to one historical workbook.
 '-------------------------------------------------------------------------------
-Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef arrCurrent As Variant)
+Private Sub UpdateHistoricalWorkbook( _
+    ByVal strHistoricalPath As String, _
+    ByRef arrCurrent As Variant, _
+    ByVal blnCombinedDashboard As Boolean)
     Const METHOD_NAME As String = "UpdateHistoricalWorkbook"
     Dim arrExisting As Variant
     Dim arrInclude() As Boolean
     Dim arrNewRows As Variant
     Dim blnCloseRequired As Boolean
+    Dim blnDashboardUpdated As Boolean
     Dim cleanupErrNumber As Long
     Dim blnHeaderUpgraded As Boolean
     Dim blnHttpPath As Boolean
@@ -238,7 +247,14 @@ Private Sub UpdateHistoricalWorkbook(ByVal strHistoricalPath As String, ByRef ar
             2)
     End If
 
-    If blnNewWorkbook Or lngNewCount > 0 Or blnHeaderUpgraded Then
+    If blnCombinedDashboard Then
+        Call EnsureCombinedDashboard(wkbHistory, wksHistory, lngExistingLastRow)
+        blnDashboardUpdated = True
+    End If
+
+    If blnNewWorkbook Or lngNewCount > 0 Or _
+        blnHeaderUpgraded Or blnDashboardUpdated Then
+
         Call ApplyWorkbookSensitivityLabel(wkbHistory)
         Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
     End If
@@ -458,7 +474,8 @@ End Sub
 Public Function AddReviewedTransactionToHistorical( _
     ByRef arrReviewed As Variant, _
     ByVal strTeam As String, _
-    ByVal colDestinationRoots As Collection) As String
+    ByVal colDestinationRoots As Collection, _
+    ByVal blnCreateTeamFiles As Boolean) As String
 
     Const METHOD_NAME As String = "AddReviewedTransactionToHistorical"
     Dim errDescription As String
@@ -480,8 +497,11 @@ Public Function AddReviewedTransactionToHistorical( _
         strTeamPath = CombinePath( _
             strRootPath, HISTORICAL_TEAM_PREFIX & strTeamFilePart & ".xlsx")
 
-        Call UpsertReviewedTransaction(strCombinedPath, arrReviewed)
-        Call UpsertReviewedTransaction(strTeamPath, arrReviewed)
+        Call UpsertReviewedTransaction(strCombinedPath, arrReviewed, True)
+
+        If blnCreateTeamFiles Then
+            Call UpsertReviewedTransaction(strTeamPath, arrReviewed, False)
+        End If
 
         If Len(strResult) > 0 Then strResult = strResult & vbCrLf
         strResult = strResult & strRootPath
@@ -512,7 +532,8 @@ End Function
 '-------------------------------------------------------------------------------
 Private Sub UpsertReviewedTransaction( _
     ByVal strHistoricalPath As String, _
-    ByRef arrReviewed As Variant)
+    ByRef arrReviewed As Variant, _
+    ByVal blnCombinedDashboard As Boolean)
 
     Const METHOD_NAME As String = "UpsertReviewedTransaction"
     Dim arrExisting As Variant
@@ -627,12 +648,21 @@ Private Sub UpsertReviewedTransaction( _
     wksHistory.Columns("R:S").NumberFormat = "#,##0.00"
     wksHistory.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
     wksHistory.Columns("W:W").NumberFormat = "@"
+    If lngTargetRow > lngExistingLastRow Then
+        lngExistingLastRow = lngTargetRow
+    End If
+
     Call ApplyHistoricalHeaderStyle(wksHistory)
     Call AutoFitColumnsWithPadding( _
         wksHistory.Range( _
             wksHistory.Cells(1, 1), _
-            wksHistory.Cells(lngTargetRow, OUTPUT_COLUMN_COUNT)).Columns, _
+            wksHistory.Cells(lngExistingLastRow, OUTPUT_COLUMN_COUNT)).Columns, _
         2)
+
+    If blnCombinedDashboard Then
+        Call EnsureCombinedDashboard( _
+            wkbHistory, wksHistory, lngExistingLastRow)
+    End If
 
     Call ApplyWorkbookSensitivityLabel(wkbHistory)
     Call SaveHistoricalWorkbookProtected(wkbHistory, strHistoricalPath)
