@@ -6,6 +6,7 @@ Public Type TAppConfig
     SaveLocal As Boolean
     SaveSharePoint As Boolean
     UpdateHistorical As Boolean
+    CreateTeamFiles As Boolean
     OutlookMailbox As String
     OutlookSourceFolder As String
     OutlookArchiveFolder As String
