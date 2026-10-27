@@ -165,18 +165,19 @@ End Function
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
 ' Parameters:    appConfig As TAppConfig; dictProcessedMailSubjects As Object
-' Returns:       ---
-' Description:   Moves processed Outlook messages to Archive after the full run succeeds.
+' Returns:       Long
+' Description:   Moves processed Outlook messages after a successful run and returns the moved count.
 '-------------------------------------------------------------------------------
-Public Sub ArchiveProcessedOutlookMessages( _
+Public Function ArchiveProcessedOutlookMessages( _
     ByRef appConfig As TAppConfig, _
-    ByVal dictProcessedMailSubjects As Object)
+    ByVal dictProcessedMailSubjects As Object) As Long
 
     Const METHOD_NAME As String = "ArchiveProcessedOutlookMessages"
     Dim arrEntryIds As Variant
     Dim arrMailInfo As Variant
     Dim errDescription As String
     Dim errNumber As Long
+    Dim lngArchivedCount As Long
     Dim lngItem As Long
     Dim objArchiveFolder As Object
     Dim objItem As Object
@@ -190,48 +191,68 @@ Public Sub ArchiveProcessedOutlookMessages( _
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    If Not dictProcessedMailSubjects Is Nothing Then
-        If dictProcessedMailSubjects.Count > 0 Then
-            Set objOutlook = CreateObject("Outlook.Application")
-            Set objNamespace = objOutlook.GetNamespace("MAPI")
-            Set objRootFolder = GetMailboxRootFolder(objNamespace, appConfig.OutlookMailbox)
-            Set objArchiveFolder = GetFolderByPath( _
-                objRootFolder, appConfig.OutlookArchiveFolder)
-            arrEntryIds = dictProcessedMailSubjects.Keys
+    If appConfig.ArchiveOutlookMessages Then
+        If Not dictProcessedMailSubjects Is Nothing Then
+            If dictProcessedMailSubjects.Count > 0 Then
+                Set objOutlook = CreateObject("Outlook.Application")
+                Set objNamespace = objOutlook.GetNamespace("MAPI")
+                Set objRootFolder = GetMailboxRootFolder( _
+                    objNamespace, appConfig.OutlookMailbox)
+                Set objArchiveFolder = GetFolderByPath( _
+                    objRootFolder, appConfig.OutlookArchiveFolder)
+                arrEntryIds = dictProcessedMailSubjects.Keys
 
-            For lngItem = LBound(arrEntryIds) To UBound(arrEntryIds)
-                strCurrentEntryId = CStr(arrEntryIds(lngItem))
-                arrMailInfo = dictProcessedMailSubjects(strCurrentEntryId)
+                arrMailInfo = dictProcessedMailSubjects( _
+                    CStr(arrEntryIds(LBound(arrEntryIds))))
                 strSourceStoreId = CStr(arrMailInfo(1))
                 strSourceFolderEntryId = CStr(arrMailInfo(2))
 
                 If StrComp( _
                     strSourceFolderEntryId, CStr(objArchiveFolder.EntryID), _
                     vbBinaryCompare) = 0 Then
+
                     Call VBA.Err.Raise( _
                         ERROR_OUTLOOK, METHOD_NAME, _
                         "Outlook source and archive folders resolve to the same folder.")
                 End If
 
-                Set objItem = objNamespace.GetItemFromID( _
-                    strCurrentEntryId, strSourceStoreId)
+                For lngItem = LBound(arrEntryIds) To UBound(arrEntryIds)
+                    strCurrentEntryId = CStr(arrEntryIds(lngItem))
+                    arrMailInfo = dictProcessedMailSubjects(strCurrentEntryId)
 
-                If objItem Is Nothing Then
-                    Call VBA.Err.Raise( _
-                        ERROR_OUTLOOK, METHOD_NAME, _
-                        "A processed Outlook message could not be reopened for archiving.")
-                End If
+                    If StrComp( _
+                        CStr(arrMailInfo(1)), strSourceStoreId, _
+                        vbBinaryCompare) <> 0 Or _
+                        StrComp( _
+                            CStr(arrMailInfo(2)), strSourceFolderEntryId, _
+                            vbBinaryCompare) <> 0 Then
 
-                If CLng(objItem.Class) <> OL_MAIL_ITEM_CLASS Then
-                    Call VBA.Err.Raise( _
-                        ERROR_OUTLOOK, METHOD_NAME, _
-                        "A processed Outlook item is no longer a mail item.")
-                End If
+                        Call VBA.Err.Raise( _
+                            ERROR_OUTLOOK, METHOD_NAME, _
+                            "Processed Outlook messages do not originate from one source folder.")
+                    End If
 
-                Set objMovedMail = objItem.Move(objArchiveFolder)
-                Set objMovedMail = Nothing
-                Set objItem = Nothing
-            Next lngItem
+                    Set objItem = objNamespace.GetItemFromID( _
+                        strCurrentEntryId, strSourceStoreId)
+
+                    If objItem Is Nothing Then
+                        Call VBA.Err.Raise( _
+                            ERROR_OUTLOOK, METHOD_NAME, _
+                            "A processed Outlook message could not be reopened for archiving.")
+                    End If
+
+                    If CLng(objItem.Class) <> OL_MAIL_ITEM_CLASS Then
+                        Call VBA.Err.Raise( _
+                            ERROR_OUTLOOK, METHOD_NAME, _
+                            "A processed Outlook item is no longer a mail item.")
+                    End If
+
+                    Set objMovedMail = objItem.Move(objArchiveFolder)
+                    lngArchivedCount = lngArchivedCount + 1
+                    Set objMovedMail = Nothing
+                    Set objItem = Nothing
+                Next lngItem
+            End If
         End If
     End If
 
@@ -243,20 +264,21 @@ ExitPoint:
     Set objNamespace = Nothing
     Set objOutlook = Nothing
 
+    If errNumber = 0 Then ArchiveProcessedOutlookMessages = lngArchivedCount
     If errNumber <> 0 Then
         Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
     End If
-    Exit Sub
+    Exit Function
 
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "sourceFolder;archiveFolder;itemIndex", _
-        appConfig.OutlookSourceFolder, appConfig.OutlookArchiveFolder, lngItem)
+        "archiveFolder;itemIndex", _
+        appConfig.OutlookArchiveFolder, lngItem)
     GoTo ExitPoint
-End Sub
+End Function
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
