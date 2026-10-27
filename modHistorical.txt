@@ -120,6 +120,7 @@ Private Sub UpdateHistoricalWorkbook( _
     Dim lngNewCount As Long
     Dim lngOutputRow As Long
     Dim lngRow As Long
+    Dim reopenErrNumber As Long
     Dim strKey As String
     Dim wkbAlreadyOpen As Excel.Workbook
     Dim wkbHistory As Excel.Workbook
