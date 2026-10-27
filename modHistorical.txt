@@ -107,6 +107,7 @@ Private Sub UpdateHistoricalWorkbook( _
     Dim blnLayoutUpgraded As Boolean
     Dim blnNewWorkbook As Boolean
     Dim blnRestoreReadOnly As Boolean
+    Dim blnSkipHistoricalWrite As Boolean
     Dim dictKeys As Object
     Dim errDescription As String
     Dim errNumber As Long
@@ -139,12 +140,17 @@ Private Sub UpdateHistoricalWorkbook( _
         End If
 
         If wkbAlreadyOpen.ReadOnly Then
-            blnRestoreReadOnly = True
-            Call wkbAlreadyOpen.ChangeFileAccess( _
-                xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
+            blnSkipHistoricalWrite = Not ReadOnlyHistoricalNeedsWrite( _
+                wkbAlreadyOpen, arrCurrent, blnCombinedDashboard)
+
+            If Not blnSkipHistoricalWrite Then
+                blnRestoreReadOnly = True
+                Call wkbAlreadyOpen.ChangeFileAccess( _
+                    xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
+            End If
         End If
 
-        If wkbAlreadyOpen.ReadOnly Then
+        If wkbAlreadyOpen.ReadOnly And Not blnSkipHistoricalWrite Then
             Call VBA.Err.Raise( _
                 ERROR_HISTORICAL, METHOD_NAME, _
                 "Historical workbook is locked and cannot be changed to read/write: " & _
@@ -170,18 +176,19 @@ Private Sub UpdateHistoricalWorkbook( _
         blnNewWorkbook = True
     End If
 
-    If wkbHistory Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_HISTORICAL, METHOD_NAME, _
-            "Historical workbook could not be accessed.")
-    End If
-    If wkbHistory.ReadOnly Then
-        Call VBA.Err.Raise( _
-            ERROR_HISTORICAL, METHOD_NAME, _
-            "Historical workbook is read-only: " & strHistoricalPath)
-    End If
+    If Not blnSkipHistoricalWrite Then
+        If wkbHistory Is Nothing Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical workbook could not be accessed.")
+        End If
+        If wkbHistory.ReadOnly Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical workbook is read-only: " & strHistoricalPath)
+        End If
 
-    Set wksHistory = GetHistoricalWorksheet(wkbHistory, blnNewWorkbook)
+        Set wksHistory = GetHistoricalWorksheet(wkbHistory, blnNewWorkbook)
 
     If blnCombinedDashboard Then
         lngHeaderRow = COMBINED_TABLE_HEADER_ROW
@@ -290,9 +297,10 @@ Private Sub UpdateHistoricalWorkbook( _
             wkbHistory, strHistoricalPath, blnNewWorkbook)
     End If
 
-    If blnRestoreReadOnly Then
-        Call wkbHistory.ChangeFileAccess(xlReadOnly)
-        blnRestoreReadOnly = False
+        If blnRestoreReadOnly Then
+            Call wkbHistory.ChangeFileAccess(xlReadOnly)
+            blnRestoreReadOnly = False
+        End If
     End If
 
 ExitPoint:
@@ -338,6 +346,128 @@ ErrHandler:
 
     GoTo ExitPoint
 End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    Read-only historical workbook, current data and dashboard flag.
+' Returns:       Boolean
+' Description:   Checks whether a read-only historical workbook really needs a write operation.
+'-------------------------------------------------------------------------------
+Private Function ReadOnlyHistoricalNeedsWrite( _
+    ByVal wkbHistory As Excel.Workbook, _
+    ByRef arrCurrent As Variant, _
+    ByVal blnCombinedDashboard As Boolean) As Boolean
+
+    Const METHOD_NAME As String = "ReadOnlyHistoricalNeedsWrite"
+    Dim arrExisting As Variant
+    Dim arrHeaders As Variant
+    Dim blnNeedsWrite As Boolean
+    Dim blnTableFound As Boolean
+    Dim dictKeys As Object
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColumn As Long
+    Dim lngHeaderRow As Long
+    Dim lngLastRow As Long
+    Dim lngRow As Long
+    Dim strActual As String
+    Dim strExpected As String
+    Dim strKey As String
+    Dim lstCandidate As Excel.ListObject
+    Dim wksHistory As Excel.Worksheet
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set wksHistory = GetHistoricalWorksheet(wkbHistory, False)
+    lngHeaderRow = 1
+
+    If blnCombinedDashboard Then
+        If StrComp(Trim$(CStr( _
+            wksHistory.Cells(COMBINED_TABLE_HEADER_ROW, 1).Value2)), _
+            "MF", vbTextCompare) <> 0 Then
+
+            blnNeedsWrite = True
+        Else
+            lngHeaderRow = COMBINED_TABLE_HEADER_ROW
+
+            For Each lstCandidate In wksHistory.ListObjects
+                If StrComp( _
+                    lstCandidate.Name, TRANSACTIONS_TABLE_NAME, _
+                    vbTextCompare) = 0 Then
+
+                    blnTableFound = True
+                    Exit For
+                End If
+            Next lstCandidate
+
+            If Not blnTableFound Then blnNeedsWrite = True
+        End If
+    End If
+
+    If Not blnNeedsWrite Then
+        arrHeaders = GetOutputHeaders()
+
+        For lngColumn = 1 To OUTPUT_COLUMN_COUNT
+            strActual = Trim$(CStr( _
+                wksHistory.Cells(lngHeaderRow, lngColumn).Value2))
+            strExpected = CStr(arrHeaders(lngColumn - 1))
+
+            If StrComp(strActual, strExpected, vbTextCompare) <> 0 Then
+                blnNeedsWrite = True
+                Exit For
+            End If
+        Next lngColumn
+    End If
+
+    If Not blnNeedsWrite Then
+        lngLastRow = wksHistory.Cells(wksHistory.Rows.Count, 6).End(xlUp).Row
+        If lngLastRow < lngHeaderRow Then lngLastRow = lngHeaderRow
+
+        Set dictKeys = CreateObject("Scripting.Dictionary")
+        dictKeys.CompareMode = vbBinaryCompare
+
+        If lngLastRow > lngHeaderRow Then
+            arrExisting = wksHistory.Range( _
+                wksHistory.Cells(lngHeaderRow, 1), _
+                wksHistory.Cells(lngLastRow, OUTPUT_COLUMN_COUNT)).Value2
+
+            For lngRow = 2 To UBound(arrExisting, 1)
+                strKey = BuildTransactionKey(arrExisting, lngRow)
+                If Not dictKeys.Exists(strKey) Then dictKeys.Add strKey, True
+            Next lngRow
+        End If
+
+        For lngRow = 2 To UBound(arrCurrent, 1)
+            strKey = BuildTransactionKey(arrCurrent, lngRow)
+
+            If Not dictKeys.Exists(strKey) Then
+                blnNeedsWrite = True
+                Exit For
+            End If
+        Next lngRow
+    End If
+
+ExitPoint:
+    Set lstCandidate = Nothing
+    Set dictKeys = Nothing
+    Set wksHistory = Nothing
+
+    If errNumber = 0 Then ReadOnlyHistoricalNeedsWrite = blnNeedsWrite
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "row;column", lngRow, lngColumn)
+    GoTo ExitPoint
+End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
@@ -631,6 +761,7 @@ Private Sub UpsertReviewedTransaction( _
     Dim blnLayoutUpgraded As Boolean
     Dim blnNewWorkbook As Boolean
     Dim blnRestoreReadOnly As Boolean
+    Dim blnSkipHistoricalWrite As Boolean
     Dim cleanupErrNumber As Long
     Dim errDescription As String
     Dim errNumber As Long
