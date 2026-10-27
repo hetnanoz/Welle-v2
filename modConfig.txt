@@ -20,9 +20,15 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
     appConfig.SaveSharePoint = ReadBooleanFlag(NAME_FLAG_SAVE_SHAREPOINT)
     appConfig.UpdateHistorical = ReadBooleanFlag(NAME_FLAG_UPDATE_HISTORICAL)
     appConfig.CreateTeamFiles = ReadBooleanFlag(NAME_FLAG_CREATE_TEAM_FILES)
+    appConfig.ArchiveInputFiles = ReadBooleanFlag(NAME_FLAG_ARCHIVE_INPUT_FILES)
+    appConfig.ArchiveOutlookMessages = ReadBooleanFlag(NAME_FLAG_ARCHIVE_OUTLOOK_MESSAGES)
     appConfig.OutlookMailbox = ReadRequiredText(NAME_OUTLOOK_MAILBOX)
     appConfig.OutlookSourceFolder = ReadRequiredText(NAME_OUTLOOK_SOURCE_FOLDER)
-    appConfig.OutlookArchiveFolder = ReadRequiredText(NAME_OUTLOOK_ARCHIVE_FOLDER)
+    If appConfig.ArchiveOutlookMessages Then
+        appConfig.OutlookArchiveFolder = ReadRequiredText(NAME_OUTLOOK_ARCHIVE_FOLDER)
+    Else
+        appConfig.OutlookArchiveFolder = ReadOptionalText(NAME_OUTLOOK_ARCHIVE_FOLDER)
+    End If
     appConfig.OutlookSubjectPrefix = ReadRequiredText(NAME_OUTLOOK_SUBJECT_PREFIX)
     appConfig.OutlookSenderEmail = ReadOptionalText(NAME_OUTLOOK_SENDER_EMAIL)
     appConfig.OutlookAttachmentPrefix = ReadRequiredText(NAME_OUTLOOK_ATTACHMENT_PREFIX)
@@ -428,13 +434,22 @@ Private Sub ValidateConfiguration(ByRef appConfig As TAppConfig)
             "Multiple alternatives may be separated with ';'.")
     End If
 
-    If StrComp( _
-        appConfig.OutlookSourceFolder, appConfig.OutlookArchiveFolder, _
-        vbTextCompare) = 0 Then
+    If appConfig.ArchiveOutlookMessages Then
+        If Len(Trim$(appConfig.OutlookArchiveFolder)) = 0 Then
+            Call VBA.Err.Raise( _
+                ERROR_CONFIGURATION, METHOD_NAME, _
+                "OUTLOOK_ARCHIVE_FOLDER is required when " & _
+                "FLAG_ARCHIVE_OUTLOOK_MESSAGES is TRUE.")
+        End If
 
-        Call VBA.Err.Raise( _
-            ERROR_CONFIGURATION, METHOD_NAME, _
-            "Outlook source and archive folders must be different.")
+        If StrComp( _
+            appConfig.OutlookSourceFolder, appConfig.OutlookArchiveFolder, _
+            vbTextCompare) = 0 Then
+
+            Call VBA.Err.Raise( _
+                ERROR_CONFIGURATION, METHOD_NAME, _
+                "Outlook source and archive folders must be different.")
+        End If
     End If
 
     If appConfig.CreateEmailDraft Then
