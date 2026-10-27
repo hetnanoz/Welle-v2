@@ -7,7 +7,7 @@ Private Const CLASS_NAME As String = "modDashboard"
 ' Creation date: 2026-10-26
 ' Parameters:    Workbook, Transactions worksheet and last transaction row.
 ' Returns:       ---
-' Description:   Creates Team/Fund slicers above the Combined transaction table.
+' Description:   Creates or reuses Team/Fund slicers above the Combined table.
 '-------------------------------------------------------------------------------
 Public Sub EnsureCombinedDashboard( _
     ByVal wkbTarget As Excel.Workbook, _
@@ -36,9 +36,6 @@ Public Sub EnsureCombinedDashboard( _
         lngLastRow = COMBINED_TABLE_HEADER_ROW
     End If
 
-    strStage = "delete existing slicers"
-    Call DeleteOwnedSlicerCaches(wkbTarget)
-
     strStage = "delete legacy dashboard"
     Call DeleteLegacyDashboardSheet(wkbTarget)
 
@@ -48,27 +45,46 @@ Public Sub EnsureCombinedDashboard( _
     strStage = "create or resize transaction table"
     Set lstTransactions = EnsureTransactionsTable(wksTransactions, lngLastRow)
 
-    strStage = "create Team slicer cache"
-    Set scTeam = wkbTarget.SlicerCaches.Add2(lstTransactions, "Team")
+    strStage = "reuse Team slicer"
+    Set slTeam = GetSlicerByName(wkbTarget, SLICER_TEAM_NAME)
+    If slTeam Is Nothing Then
+        strStage = "create Team slicer cache"
+        Set scTeam = wkbTarget.SlicerCaches.Add2(lstTransactions, "Team")
 
-    strStage = "create Team slicer"
-    Set slTeam = scTeam.Slicers.Add( _
-        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 360, 125)
+        strStage = "create Team slicer"
+        Set slTeam = scTeam.Slicers.Add( _
+            wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 360, 125)
+    End If
 
-    strStage = "create Fund slicer cache"
-    Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
+    strStage = "reuse Fund slicer"
+    Set slFund = GetSlicerByName(wkbTarget, SLICER_FUND_NAME)
+    If slFund Is Nothing Then
+        strStage = "create Fund slicer cache"
+        Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
 
-    strStage = "create Fund slicer"
-    Set slFund = scFund.Slicers.Add( _
-        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 385, 520, 125)
+        strStage = "create Fund slicer"
+        Set slFund = scFund.Slicers.Add( _
+            wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 385, 520, 125)
+    End If
 
+    strStage = "format slicers"
     With slTeam
+        .Caption = "Team"
+        .Top = 8
+        .Left = 8
+        .Width = 360
+        .Height = 125
         .DisplayHeader = True
         .NumberOfColumns = 2
         .Locked = True
     End With
 
     With slFund
+        .Caption = "Fund"
+        .Top = 8
+        .Left = 385
+        .Width = 520
+        .Height = 125
         .DisplayHeader = True
         .NumberOfColumns = 3
         .Locked = True
@@ -96,6 +112,60 @@ ErrHandler:
         "stage", strStage)
     GoTo ExitPoint
 End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-26
+' Parameters:    wkbTarget As Excel.Workbook; strSlicerName As String
+' Returns:       Excel.Slicer
+' Description:   Finds an existing slicer by name without rebuilding its cache.
+'-------------------------------------------------------------------------------
+Private Function GetSlicerByName( _
+    ByVal wkbTarget As Excel.Workbook, _
+    ByVal strSlicerName As String) As Excel.Slicer
+
+    Const METHOD_NAME As String = "GetSlicerByName"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim scCandidate As Excel.SlicerCache
+    Dim slCandidate As Excel.Slicer
+    Dim slResult As Excel.Slicer
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each scCandidate In wkbTarget.SlicerCaches
+        For Each slCandidate In scCandidate.Slicers
+            If StrComp( _
+                slCandidate.Name, strSlicerName, vbTextCompare) = 0 Then
+
+                Set slResult = slCandidate
+                Exit For
+            End If
+        Next slCandidate
+
+        If Not slResult Is Nothing Then Exit For
+    Next scCandidate
+
+ExitPoint:
+    Set slCandidate = Nothing
+    Set scCandidate = Nothing
+    If errNumber = 0 Then Set GetSlicerByName = slResult
+    Set slResult = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "slicerName", strSlicerName)
+    GoTo ExitPoint
+End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
@@ -329,4 +399,3 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Sub
-
