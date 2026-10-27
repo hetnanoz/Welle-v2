@@ -1704,6 +1704,7 @@ Public Function GetOpenWorkbookByFullName( _
     Dim strCandidateFullName As String
     Dim strTargetFileName As String
     Dim strTargetFullName As String
+    Dim lngNameMatchCount As Long
     Dim wkbCandidate As Excel.Workbook
     Dim wkbNameMatch As Excel.Workbook
     Dim wkbResult As Excel.Workbook
@@ -1715,6 +1716,7 @@ Public Function GetOpenWorkbookByFullName( _
 
     For Each wkbCandidate In Application.Workbooks
         If StrComp(wkbCandidate.Name, strTargetFileName, vbTextCompare) = 0 Then
+            lngNameMatchCount = lngNameMatchCount + 1
             If wkbNameMatch Is Nothing Then Set wkbNameMatch = wkbCandidate
 
             strCandidateFullName = NormalizeWorkbookPath(wkbCandidate.FullName)
@@ -1726,7 +1728,9 @@ Public Function GetOpenWorkbookByFullName( _
         End If
     Next wkbCandidate
 
-    If wkbResult Is Nothing And blnAllowNameFallback Then Set wkbResult = wkbNameMatch
+    If wkbResult Is Nothing And blnAllowNameFallback Then
+        If lngNameMatchCount = 1 Then Set wkbResult = wkbNameMatch
+    End If
 
 ExitPoint:
     Set wkbCandidate = Nothing
@@ -1825,7 +1829,7 @@ End Function
 ' Creation date: 2026-08-27
 ' Parameters:    appConfig As TAppConfig; dtRunTimestamp As Date; strFallbackWorkspace As String
 ' Returns:       String
-' Description:   Creates the working Input folder, preferring the enabled local daily output folder.
+' Description:   Uses the daily Input archive only when enabled; otherwise uses the run workspace.
 '-------------------------------------------------------------------------------
 Public Function CreateInputWorkingFolder( _
     ByRef appConfig As TAppConfig, _
@@ -1840,9 +1844,10 @@ Public Function CreateInputWorkingFolder( _
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    If appConfig.SaveLocal Then
+    If appConfig.ArchiveInputFiles And appConfig.SaveLocal Then
         strResolvedLocalRoot = ResolveConfiguredPath(appConfig.OutputLocalBase)
-        strDailyFolder = BuildDatedFolderPath(strResolvedLocalRoot, DateValue(dtRunTimestamp))
+        strDailyFolder = BuildDatedFolderPath( _
+            strResolvedLocalRoot, DateValue(dtRunTimestamp))
         strResult = CombinePath(strDailyFolder, "Input")
     Else
         strResult = CombinePath(strFallbackWorkspace, "Input")
@@ -1860,8 +1865,8 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "saveLocal;localBase;fallbackWorkspace", _
-        appConfig.SaveLocal, appConfig.OutputLocalBase, strFallbackWorkspace)
+        "archiveInputFiles;saveLocal;localBase", _
+        appConfig.ArchiveInputFiles, appConfig.SaveLocal, appConfig.OutputLocalBase)
     GoTo ExitPoint
 End Function
 
