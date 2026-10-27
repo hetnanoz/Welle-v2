@@ -108,6 +108,104 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    strFilePath As String
+' Returns:       Excel.Workbook
+' Description:   Opens one input workbook in data-extraction mode and disables external links.
+'-------------------------------------------------------------------------------
+Private Function OpenInputWorkbookForData( _
+    ByVal strFilePath As String) As Excel.Workbook
+
+    Const METHOD_NAME As String = "OpenInputWorkbookForData"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim wkbResult As Excel.Workbook
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set wkbResult = Application.Workbooks.Open( _
+        Filename:=strFilePath, UpdateLinks:=0, ReadOnly:=True, _
+        IgnoreReadOnlyRecommended:=True, AddToMru:=False, _
+        Notify:=False, Local:=True, CorruptLoad:=xlExtractData)
+
+    If wkbResult Is Nothing Then
+        Call VBA.Err.Raise( _
+            ERROR_INPUT_DATA, METHOD_NAME, _
+            "Input workbook could not be opened in data-extraction mode.")
+    End If
+
+    wkbResult.UpdateRemoteReferences = False
+    Call BreakInputExternalLinks(wkbResult)
+
+ExitPoint:
+    If errNumber = 0 Then Set OpenInputWorkbookForData = wkbResult
+    Set wkbResult = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "filePath", strFilePath)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    wkbInput As Excel.Workbook
+' Returns:       ---
+' Description:   Breaks Excel workbook links in the temporary in-memory input copy.
+'-------------------------------------------------------------------------------
+Private Sub BreakInputExternalLinks(ByVal wkbInput As Excel.Workbook)
+    Const METHOD_NAME As String = "BreakInputExternalLinks"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngLink As Long
+    Dim varLinks As Variant
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If wkbInput Is Nothing Then
+        Call VBA.Err.Raise( _
+            ERROR_INPUT_DATA, METHOD_NAME, _
+            "Input workbook is not available for link cleanup.")
+    End If
+
+    varLinks = wkbInput.LinkSources(Type:=xlLinkTypeExcelLinks)
+
+    If IsArray(varLinks) Then
+        For lngLink = LBound(varLinks) To UBound(varLinks)
+            Call wkbInput.BreakLink( _
+                Name:=CStr(varLinks(lngLink)), _
+                Type:=xlLinkTypeExcelLinks)
+        Next lngLink
+    End If
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "linkIndex", lngLink)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
 ' Parameters:    File path, worksheet options, mail subject, output data and row count.
 ' Returns:       ---
@@ -153,9 +251,7 @@ Private Sub ReadInputFileData( _
     Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strFilePath, False)
 
     If wkbAlreadyOpen Is Nothing Then
-        Set wkbInput = Application.Workbooks.Open( _
-            Filename:=strFilePath, UpdateLinks:=0, ReadOnly:=True, _
-            IgnoreReadOnlyRecommended:=True, AddToMru:=False, Notify:=False)
+        Set wkbInput = OpenInputWorkbookForData(strFilePath)
         blnCloseRequired = True
     Else
         Set wkbInput = wkbAlreadyOpen
