@@ -16,6 +16,7 @@ Public Sub RunDallasCashTransactions()
     Dim blnEmailDraftCreated As Boolean
     Dim blnEmailLabelApplied As Boolean
     Dim cleanupErrNumber As Long
+    Dim blnPreviousAskToUpdateLinks As Boolean
     Dim blnPreviousDisplayAlerts As Boolean
     Dim blnPreviousEnableEvents As Boolean
     Dim blnPreviousScreenUpdating As Boolean
@@ -46,6 +47,7 @@ Public Sub RunDallasCashTransactions()
     blnPreviousScreenUpdating = Application.ScreenUpdating
     blnPreviousEnableEvents = Application.EnableEvents
     blnPreviousDisplayAlerts = Application.DisplayAlerts
+    blnPreviousAskToUpdateLinks = Application.AskToUpdateLinks
     xlPreviousCalculation = Application.Calculation
     varPreviousStatusBar = Application.StatusBar
 
@@ -61,6 +63,7 @@ Public Sub RunDallasCashTransactions()
     Application.ScreenUpdating = False
     Application.EnableEvents = False
     Application.DisplayAlerts = False
+    Application.AskToUpdateLinks = False
     Application.Calculation = xlCalculationManual
     Application.AutomationSecurity = AUTOMATION_SECURITY_FORCE_DISABLE
     Application.StatusBar = "Dallas Cash Transactions: reading configuration..."
@@ -161,9 +164,9 @@ ExitPoint:
     If blnStateCaptured Then
         cleanupErrNumber = RestoreApplicationStateSafely( _
             varPreviousStatusBar, lngPreviousAutomationSecurity, _
-            xlPreviousCalculation, blnPreviousDisplayAlerts, _
-            blnPreviousEnableEvents, blnPreviousScreenUpdating, _
-            errNumber = 0)
+            xlPreviousCalculation, blnPreviousAskToUpdateLinks, _
+            blnPreviousDisplayAlerts, blnPreviousEnableEvents, _
+            blnPreviousScreenUpdating, errNumber = 0)
 
         If errNumber = 0 And cleanupErrNumber <> 0 Then
             errNumber = cleanupErrNumber
@@ -361,6 +364,7 @@ Private Function RestoreApplicationStateSafely( _
     ByVal varPreviousStatusBar As Variant, _
     ByVal lngPreviousAutomationSecurity As Long, _
     ByVal xlPreviousCalculation As XlCalculation, _
+    ByVal blnPreviousAskToUpdateLinks As Boolean, _
     ByVal blnPreviousDisplayAlerts As Boolean, _
     ByVal blnPreviousEnableEvents As Boolean, _
     ByVal blnPreviousScreenUpdating As Boolean, _
@@ -375,6 +379,7 @@ Private Function RestoreApplicationStateSafely( _
     Application.StatusBar = varPreviousStatusBar
     Application.AutomationSecurity = lngPreviousAutomationSecurity
     Application.Calculation = xlPreviousCalculation
+    Application.AskToUpdateLinks = blnPreviousAskToUpdateLinks
     Application.DisplayAlerts = blnPreviousDisplayAlerts
     Application.EnableEvents = blnPreviousEnableEvents
     Application.ScreenUpdating = blnPreviousScreenUpdating
