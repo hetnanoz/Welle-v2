@@ -1,6 +1,9 @@
 Option Explicit
 
 Private Const CLASS_NAME As String = "modInput"
+Private Const AD_SCHEMA_TABLES As Long = 20
+Private Const AD_OPEN_FORWARD_ONLY As Long = 0
+Private Const AD_LOCK_READ_ONLY As Long = 1
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
@@ -110,36 +113,129 @@ End Function
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-27
 ' Parameters:    strFilePath As String
-' Returns:       Excel.Workbook
-' Description:   Opens one input workbook in data-extraction mode and disables external links.
+' Returns:       Object
+' Description:   Opens an ACE OLE DB connection to an Excel input without opening Excel UI.
 '-------------------------------------------------------------------------------
-Private Function OpenInputWorkbookForData( _
-    ByVal strFilePath As String) As Excel.Workbook
-
-    Const METHOD_NAME As String = "OpenInputWorkbookForData"
+Private Function OpenInputDataConnection(ByVal strFilePath As String) As Object
+    Const METHOD_NAME As String = "OpenInputDataConnection"
     Dim errDescription As String
     Dim errNumber As Long
-    Dim wkbResult As Excel.Workbook
+    Dim objConnection As Object
+    Dim strConnection As String
+    Dim strExtension As String
+    Dim strExtendedProperties As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    Set wkbResult = Application.Workbooks.Open( _
-        Filename:=strFilePath, UpdateLinks:=0, ReadOnly:=True, _
-        IgnoreReadOnlyRecommended:=True, AddToMru:=False, _
-        Notify:=False, Local:=True, CorruptLoad:=xlExtractData)
+    strExtension = LCase$(GetFileExtension(strFilePath))
 
-    If wkbResult Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_INPUT_DATA, METHOD_NAME, _
-            "Input workbook could not be opened in data-extraction mode.")
-    End If
+    Select Case strExtension
+        Case ".xlsx"
+            strExtendedProperties = "Excel 12.0 Xml;HDR=NO;IMEX=1"
+        Case ".xls"
+            strExtendedProperties = "Excel 8.0;HDR=NO;IMEX=1"
+        Case Else
+            Call VBA.Err.Raise( _
+                ERROR_INPUT_DATA, METHOD_NAME, _
+                "Unsupported input extension for data-only reader: " & strExtension)
+    End Select
 
-    wkbResult.UpdateRemoteReferences = False
-    Call BreakInputExternalLinks(wkbResult)
+    strConnection = _
+        "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" & strFilePath & _
+        ";Mode=Read;Extended Properties=""" & strExtendedProperties & """;"
+
+    Set objConnection = CreateObject("ADODB.Connection")
+    Call objConnection.Open(strConnection)
 
 ExitPoint:
-    If errNumber = 0 Then Set OpenInputWorkbookForData = wkbResult
-    Set wkbResult = Nothing
+    If errNumber = 0 Then Set OpenInputDataConnection = objConnection
+    Set objConnection = Nothing
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    errDescription = _
+        "The input file could not be read through the ACE OLE DB data reader. " & _
+        "This reader avoids Excel/Outlook temporary-file links. Original error: " & _
+        errDescription
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "filePath", strFilePath)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    objConnection As Object; strWorksheetOptions As String
+' Returns:       String
+' Description:   Resolves the first configured worksheet available through ACE schema.
+'-------------------------------------------------------------------------------
+Private Function ResolveAdoWorksheetName( _
+    ByVal objConnection As Object, _
+    ByVal strWorksheetOptions As String) As String
+
+    Const METHOD_NAME As String = "ResolveAdoWorksheetName"
+    Dim arrOptions As Variant
+    Dim dictSheets As Object
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngOption As Long
+    Dim objSchema As Object
+    Dim strNormalized As String
+    Dim strOption As String
+    Dim strRawName As String
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set dictSheets = CreateObject("Scripting.Dictionary")
+    dictSheets.CompareMode = vbTextCompare
+    Set objSchema = objConnection.OpenSchema(AD_SCHEMA_TABLES)
+
+    Do While Not objSchema.EOF
+        strRawName = CStr(objSchema.Fields("TABLE_NAME").Value)
+        strNormalized = NormalizeAdoWorksheetName(strRawName)
+
+        If Len(strNormalized) > 0 Then
+            If Not dictSheets.Exists(strNormalized) Then
+                dictSheets.Add strNormalized, GetAdoQueryTableName(strRawName)
+            End If
+        End If
+
+        Call objSchema.MoveNext
+    Loop
+
+    arrOptions = Split(strWorksheetOptions, ";")
+
+    For lngOption = LBound(arrOptions) To UBound(arrOptions)
+        strOption = Trim$(CStr(arrOptions(lngOption)))
+
+        If Len(strOption) > 0 Then
+            If dictSheets.Exists(strOption) Then
+                strResult = CStr(dictSheets(strOption))
+                Exit For
+            End If
+        End If
+    Next lngOption
+
+    If Len(strResult) = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_INPUT_DATA, METHOD_NAME, _
+            "None of the configured input worksheets was found: " & _
+            strWorksheetOptions)
+    End If
+
+ExitPoint:
+    Set objSchema = Nothing
+    Set dictSheets = Nothing
+    If errNumber = 0 Then ResolveAdoWorksheetName = strResult
 
     If errNumber <> 0 Then
         Call VBA.Err.Raise( _
@@ -152,64 +248,239 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "filePath", strFilePath)
+        "worksheetOptions", strWorksheetOptions)
     GoTo ExitPoint
 End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-27
-' Parameters:    wkbInput As Excel.Workbook
-' Returns:       ---
-' Description:   Breaks Excel workbook links in the temporary in-memory input copy.
+' Parameters:    strRawName As String
+' Returns:       String
+' Description:   Normalizes an ACE schema table name to a worksheet name.
 '-------------------------------------------------------------------------------
-Private Sub BreakInputExternalLinks(ByVal wkbInput As Excel.Workbook)
-    Const METHOD_NAME As String = "BreakInputExternalLinks"
+Private Function NormalizeAdoWorksheetName(ByVal strRawName As String) As String
+    Const METHOD_NAME As String = "NormalizeAdoWorksheetName"
     Dim errDescription As String
     Dim errNumber As Long
-    Dim lngLink As Long
-    Dim varLinks As Variant
+    Dim strResult As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    If wkbInput Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_INPUT_DATA, METHOD_NAME, _
-            "Input workbook is not available for link cleanup.")
+    strResult = Trim$(strRawName)
+
+    If Len(strResult) >= 2 Then
+        If Left$(strResult, 1) = "'" And Right$(strResult, 1) = "'" Then
+            strResult = Mid$(strResult, 2, Len(strResult) - 2)
+        End If
     End If
 
-    varLinks = wkbInput.LinkSources(Type:=xlLinkTypeExcelLinks)
-
-    If IsArray(varLinks) Then
-        For lngLink = LBound(varLinks) To UBound(varLinks)
-            Call wkbInput.BreakLink( _
-                Name:=CStr(varLinks(lngLink)), _
-                Type:=xlLinkTypeExcelLinks)
-        Next lngLink
+    If Right$(strResult, 1) = "$" Then
+        strResult = Left$(strResult, Len(strResult) - 1)
+    Else
+        strResult = vbNullString
     End If
 
 ExitPoint:
+    If errNumber = 0 Then NormalizeAdoWorksheetName = strResult
     If errNumber <> 0 Then
         Call VBA.Err.Raise( _
             errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
     End If
-    Exit Sub
+    Exit Function
 
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "linkIndex", lngLink)
+        "rawName", strRawName)
     GoTo ExitPoint
-End Sub
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    strRawName As String
+' Returns:       String
+' Description:   Converts an ACE schema worksheet entry to a safe SQL table name.
+'-------------------------------------------------------------------------------
+Private Function GetAdoQueryTableName(ByVal strRawName As String) As String
+    Const METHOD_NAME As String = "GetAdoQueryTableName"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strResult = Trim$(strRawName)
+
+    If Len(strResult) >= 2 Then
+        If Left$(strResult, 1) = "'" And Right$(strResult, 1) = "'" Then
+            strResult = Mid$(strResult, 2, Len(strResult) - 2)
+        End If
+    End If
+
+    strResult = Replace$(strResult, "]", "]]")
+
+ExitPoint:
+    If errNumber = 0 Then GetAdoQueryTableName = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "rawName", strRawName)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    objConnection As Object; strQueryTableName As String
+' Returns:       Variant
+' Description:   Reads a worksheet into a row-major array without opening an Excel workbook.
+'-------------------------------------------------------------------------------
+Private Function ReadAdoWorksheet( _
+    ByVal objConnection As Object, _
+    ByVal strQueryTableName As String) As Variant
+
+    Const METHOD_NAME As String = "ReadAdoWorksheet"
+    Dim arrRaw As Variant
+    Dim arrResult As Variant
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColumn As Long
+    Dim lngColumnCount As Long
+    Dim lngRow As Long
+    Dim lngRowCount As Long
+    Dim objRecordset As Object
+    Dim strSql As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strSql = "SELECT * FROM [" & strQueryTableName & "]"
+    Set objRecordset = CreateObject("ADODB.Recordset")
+    Call objRecordset.Open( _
+        strSql, objConnection, AD_OPEN_FORWARD_ONLY, AD_LOCK_READ_ONLY)
+
+    If Not (objRecordset.BOF And objRecordset.EOF) Then
+        lngColumnCount = objRecordset.Fields.Count
+        arrRaw = objRecordset.GetRows()
+        lngRowCount = UBound(arrRaw, 2) + 1
+        ReDim arrResult(1 To lngRowCount, 1 To lngColumnCount)
+
+        For lngRow = 1 To lngRowCount
+            For lngColumn = 1 To lngColumnCount
+                arrResult(lngRow, lngColumn) = _
+                    arrRaw(lngColumn - 1, lngRow - 1)
+            Next lngColumn
+        Next lngRow
+    End If
+
+ExitPoint:
+    Set objRecordset = Nothing
+    If errNumber = 0 Then ReadAdoWorksheet = arrResult
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "worksheet", strQueryTableName)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    arrSheet As Variant
+' Returns:       Long
+' Description:   Finds the last populated header column in an ADO worksheet array.
+'-------------------------------------------------------------------------------
+Private Function GetAdoLastHeaderColumn(ByRef arrSheet As Variant) As Long
+    Const METHOD_NAME As String = "GetAdoLastHeaderColumn"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColumn As Long
+    Dim lngResult As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If IsArray(arrSheet) Then
+        For lngColumn = UBound(arrSheet, 2) To LBound(arrSheet, 2) Step -1
+            If Len(GetHeaderText(arrSheet(1, lngColumn))) > 0 Then
+                lngResult = lngColumn
+                Exit For
+            End If
+        Next lngColumn
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then GetAdoLastHeaderColumn = lngResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "column", lngColumn)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-27
+' Parameters:    objConnection As Object
+' Returns:       Long
+' Description:   Closes an ADO connection during cleanup without masking a primary error.
+'-------------------------------------------------------------------------------
+Private Function CloseAdoConnectionSafely(ByVal objConnection As Object) As Long
+    Const METHOD_NAME As String = "CloseAdoConnectionSafely"
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If Not objConnection Is Nothing Then
+        If CLng(objConnection.State) <> 0 Then Call objConnection.Close
+    End If
+
+ExitPoint:
+    CloseAdoConnectionSafely = errNumber
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
 ' Parameters:    File path, worksheet options, mail subject, output data and row count.
 ' Returns:       ---
-' Description:   Reads one input workbook and normalizes its columns by header.
+' Description:   Reads one input through ACE OLE DB and normalizes columns by header.
 '-------------------------------------------------------------------------------
 Private Sub ReadInputFileData( _
     ByVal strFilePath As String, _
@@ -219,147 +490,104 @@ Private Sub ReadInputFileData( _
     ByRef lngDataRows As Long)
 
     Const METHOD_NAME As String = "ReadInputFileData"
+    Dim arrSheet As Variant
     Dim arrSource As Variant
-    Dim blnAccountFormatMixed As Boolean
-    Dim blnCloseRequired As Boolean
     Dim cleanupErrNumber As Long
     Dim dictColumnMap As Object
     Dim errDescription As String
     Dim errNumber As Long
     Dim handlerErrDescription As String
     Dim handlerErrNumber As Long
-    Dim lngAccountSourceColumn As Long
     Dim lngLastColumn As Long
-    Dim lngLastRow As Long
     Dim lngOutputRow As Long
+    Dim lngSheetRowCount As Long
     Dim lngSourceColumn As Long
     Dim lngSourceRow As Long
     Dim lngTargetColumn As Long
+    Dim objConnection As Object
     Dim strAccountContext As String
-    Dim strAccountNumberFormat As String
     Dim strDisplayedAccount As String
-    Dim varAccountNumberFormat As Variant
-    Dim wkbAlreadyOpen As Excel.Workbook
-    Dim wkbInput As Excel.Workbook
-    Dim wksInput As Excel.Worksheet
+    Dim strQuerySheet As String
+    Dim varValue As Variant
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     arrData = Empty
     lngDataRows = 0
+    Set objConnection = OpenInputDataConnection(strFilePath)
+    strQuerySheet = ResolveAdoWorksheetName( _
+        objConnection, strWorksheetName)
+    arrSheet = ReadAdoWorksheet(objConnection, strQuerySheet)
 
-    Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strFilePath, False)
+    If IsArray(arrSheet) Then
+        lngSheetRowCount = UBound(arrSheet, 1)
+        lngLastColumn = GetAdoLastHeaderColumn(arrSheet)
 
-    If wkbAlreadyOpen Is Nothing Then
-        Set wkbInput = OpenInputWorkbookForData(strFilePath)
-        blnCloseRequired = True
-    Else
-        Set wkbInput = wkbAlreadyOpen
-    End If
-
-    If wkbInput Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_INPUT_DATA, METHOD_NAME, _
-            "Input workbook could not be opened or reused: '" & strFilePath & "'.")
-    End If
-
-    If wkbInput.Worksheets.Count = 0 Then
-        Call VBA.Err.Raise( _
-            ERROR_INPUT_DATA, METHOD_NAME, _
-            "Input workbook does not contain a worksheet: '" & strFilePath & "'.")
-    End If
-
-    Set wksInput = GetConfiguredInputWorksheet(wkbInput, strWorksheetName)
-
-    If wksInput Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_INPUT_DATA, METHOD_NAME, _
-            "None of the configured worksheets '" & strWorksheetName & _
-            "' was found in input file '" & strFilePath & "'.")
-    End If
-
-    lngLastColumn = GetInputLastHeaderColumn(wksInput)
-    lngLastRow = GetInputLastRow(wksInput, lngLastColumn)
-
-    If lngLastRow >= INPUT_FIRST_DATA_ROW Then
-        arrSource = wksInput.Range( _
-            wksInput.Cells(INPUT_FIRST_DATA_ROW, 1), _
-            wksInput.Cells(lngLastRow, lngLastColumn)).Value2
-
-        If ArrayContainsInputData(arrSource) Then
+        If lngLastColumn > 0 And lngSheetRowCount >= INPUT_FIRST_DATA_ROW Then
             Set dictColumnMap = BuildInputColumnMap( _
-                wksInput, lngLastColumn, strFilePath, strMailSubject)
+                arrSheet, lngLastColumn, strFilePath, strMailSubject)
 
-            If dictColumnMap.Exists(1) Then
-                lngAccountSourceColumn = CLng(dictColumnMap(1))
-                varAccountNumberFormat = wksInput.Range( _
-                    wksInput.Cells(INPUT_FIRST_DATA_ROW, lngAccountSourceColumn), _
-                    wksInput.Cells(lngLastRow, lngAccountSourceColumn)).NumberFormat
+            ReDim arrSource( _
+                1 To lngSheetRowCount - INPUT_HEADER_ROW, _
+                1 To lngLastColumn)
 
-                If IsNull(varAccountNumberFormat) Then
-                    blnAccountFormatMixed = True
-                Else
-                    strAccountNumberFormat = CStr(varAccountNumberFormat)
-                End If
-            End If
+            For lngSourceRow = INPUT_FIRST_DATA_ROW To lngSheetRowCount
+                For lngSourceColumn = 1 To lngLastColumn
+                    arrSource(lngSourceRow - INPUT_HEADER_ROW, lngSourceColumn) = _
+                        arrSheet(lngSourceRow, lngSourceColumn)
+                Next lngSourceColumn
+            Next lngSourceRow
+        End If
+    End If
 
+    If IsArray(arrSource) Then
+        If ArrayContainsInputData(arrSource) Then
             lngDataRows = CountInputDataRows(arrSource, dictColumnMap)
 
             If lngDataRows > 0 Then
                 ReDim arrData(1 To lngDataRows, 1 To INPUT_COLUMN_COUNT)
 
                 For lngSourceRow = 1 To UBound(arrSource, 1)
-                    If InputRowHasData(arrSource, lngSourceRow, dictColumnMap) Then
-                        lngOutputRow = lngOutputRow + 1
+                If InputRowHasData(arrSource, lngSourceRow, dictColumnMap) Then
+                    lngOutputRow = lngOutputRow + 1
 
-                        For lngTargetColumn = 1 To INPUT_COLUMN_COUNT
-                            If dictColumnMap.Exists(lngTargetColumn) Then
-                                lngSourceColumn = CLng(dictColumnMap(lngTargetColumn))
+                    For lngTargetColumn = 1 To INPUT_COLUMN_COUNT
+                        If dictColumnMap.Exists(lngTargetColumn) Then
+                            lngSourceColumn = CLng(dictColumnMap(lngTargetColumn))
+                            varValue = arrSource(lngSourceRow, lngSourceColumn)
 
-                                If lngTargetColumn = 1 Then
-                                    strAccountContext = "Input file: '" & strFilePath & "'."
+                            If lngTargetColumn = 1 Then
+                                strAccountContext = _
+                                    "Input file: '" & strFilePath & "'."
 
-                                    If IsNumeric(arrSource(lngSourceRow, lngSourceColumn)) Then
-                                        strDisplayedAccount = GetFastDisplayedAccountText( _
-                                            arrSource(lngSourceRow, lngSourceColumn), _
-                                            strAccountNumberFormat)
+                                If IsError(varValue) Or IsNull(varValue) Or _
+                                    IsEmpty(varValue) Then
 
-                                        If blnAccountFormatMixed Then
-                                            strDisplayedAccount = CStr( _
-                                                wksInput.Cells( _
-                                                    INPUT_FIRST_DATA_ROW + lngSourceRow - 1, _
-                                                    lngSourceColumn).Text)
-                                        End If
-                                    ElseIf IsError(arrSource(lngSourceRow, lngSourceColumn)) Then
-                                        strDisplayedAccount = vbNullString
-                                    ElseIf IsNull(arrSource(lngSourceRow, lngSourceColumn)) Or _
-                                        IsEmpty(arrSource(lngSourceRow, lngSourceColumn)) Then
-                                        strDisplayedAccount = vbNullString
-                                    Else
-                                        strDisplayedAccount = Trim$(CStr( _
-                                            arrSource(lngSourceRow, lngSourceColumn)))
-                                    End If
-
-                                    arrData(lngOutputRow, lngTargetColumn) = _
-                                        NormalizeAccountIdentifier( _
-                                            arrSource(lngSourceRow, lngSourceColumn), _
-                                            strDisplayedAccount, ERROR_INPUT_DATA, _
-                                            strAccountContext)
-                                ElseIf lngTargetColumn = 3 Or lngTargetColumn = 4 Then
-                                    strAccountContext = "Input file: '" & strFilePath & "'."
-                                    arrData(lngOutputRow, lngTargetColumn) = _
-                                        NormalizeInputDateValue( _
-                                            arrSource(lngSourceRow, lngSourceColumn), _
-                                            strAccountContext)
+                                    strDisplayedAccount = vbNullString
                                 Else
-                                    arrData(lngOutputRow, lngTargetColumn) = _
-                                        arrSource(lngSourceRow, lngSourceColumn)
+                                    strDisplayedAccount = Trim$(CStr(varValue))
                                 End If
+
+                                arrData(lngOutputRow, lngTargetColumn) = _
+                                    NormalizeAccountIdentifier( _
+                                        varValue, strDisplayedAccount, _
+                                        ERROR_INPUT_DATA, strAccountContext)
+                            ElseIf lngTargetColumn = 3 Or _
+                                lngTargetColumn = 4 Then
+
+                                strAccountContext = _
+                                    "Input file: '" & strFilePath & "'."
+                                arrData(lngOutputRow, lngTargetColumn) = _
+                                    NormalizeInputDateValue( _
+                                        varValue, strAccountContext)
                             Else
-                                arrData(lngOutputRow, lngTargetColumn) = vbNullString
+                                arrData(lngOutputRow, lngTargetColumn) = varValue
                             End If
-                        Next lngTargetColumn
-                    End If
+                        Else
+                            arrData(lngOutputRow, lngTargetColumn) = vbNullString
+                        End If
+                    Next lngTargetColumn
+                End If
                 Next lngSourceRow
             End If
         End If
@@ -367,22 +595,22 @@ Private Sub ReadInputFileData( _
 
 ExitPoint:
     Set dictColumnMap = Nothing
-    Set wksInput = Nothing
-    Set wkbAlreadyOpen = Nothing
 
-    If blnCloseRequired Then
-        blnCloseRequired = False
-        cleanupErrNumber = CloseWorkbookSafely(wkbInput, False)
+    If Not objConnection Is Nothing Then
+        cleanupErrNumber = CloseAdoConnectionSafely(objConnection)
 
         If errNumber = 0 And cleanupErrNumber <> 0 Then
             errNumber = cleanupErrNumber
-            errDescription = "The input workbook could not be closed during cleanup."
+            errDescription = _
+                "The input data connection could not be closed during cleanup."
         End If
     End If
 
-    Set wkbInput = Nothing
+    Set objConnection = Nothing
+
     If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
     End If
     Exit Sub
 
@@ -400,62 +628,7 @@ ErrHandler:
 
     GoTo ExitPoint
 End Sub
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-08-27
-' Parameters:    varValue As Variant; strNumberFormat As String
-' Returns:       String
-' Description:   Reconstructs leading-zero Account display text without a per-row worksheet COM call.
-'-------------------------------------------------------------------------------
-Private Function GetFastDisplayedAccountText( _
-    ByVal varValue As Variant, _
-    ByVal strNumberFormat As String) As String
 
-    Const METHOD_NAME As String = "GetFastDisplayedAccountText"
-    Dim blnZeroMask As Boolean
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim lngPosition As Long
-    Dim strCharacter As String
-    Dim strFormat As String
-    Dim strResult As String
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    If IsNumeric(varValue) Then
-        strFormat = Trim$(strNumberFormat)
-
-        If Len(strFormat) > 0 Then
-            blnZeroMask = True
-
-            For lngPosition = 1 To Len(strFormat)
-                strCharacter = Mid$(strFormat, lngPosition, 1)
-
-                If strCharacter <> "0" Then
-                    blnZeroMask = False
-                    Exit For
-                End If
-            Next lngPosition
-
-            If blnZeroMask Then strResult = Format$(CDbl(varValue), strFormat)
-        End If
-    End If
-
-ExitPoint:
-    If errNumber = 0 Then GetFastDisplayedAccountText = strResult
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Function
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "numberFormat", strNumberFormat)
-    GoTo ExitPoint
-End Function
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
@@ -503,7 +676,10 @@ Private Function NormalizeInputDateValue( _
             End If
 
             varResult = dblResult
-        ElseIf Len(strValue) = 10 And _
+        ElseIf VarType(varValue) = vbDate Then
+            dtValue = CDate(varValue)
+            varResult = Fix(CDbl(dtValue))
+        ElseIf Len(strValue) >= 10 And _
             Mid$(strValue, 5, 1) = "-" And Mid$(strValue, 8, 1) = "-" Then
 
             If Not IsNumeric(Left$(strValue, 4)) Or _
@@ -516,7 +692,7 @@ Private Function NormalizeInputDateValue( _
 
             lngYear = CLng(Left$(strValue, 4))
             lngMonth = CLng(Mid$(strValue, 6, 2))
-            lngDay = CLng(Right$(strValue, 2))
+            lngDay = CLng(Mid$(strValue, 9, 2))
             dtValue = DateSerial(lngYear, lngMonth, lngDay)
 
             If Year(dtValue) <> lngYear Or _
@@ -554,12 +730,12 @@ End Function
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
-' Parameters:    Input worksheet; last column; source path; source mail subject
+' Parameters:    Header array; last column; source path; source mail subject
 ' Returns:       Object
-' Description:   Maps source header positions to the canonical sixteen columns.
+' Description:   Maps ADO header positions to the canonical sixteen columns.
 '-------------------------------------------------------------------------------
 Private Function BuildInputColumnMap( _
-    ByVal wksInput As Excel.Worksheet, _
+    ByRef arrSheet As Variant, _
     ByVal lngLastColumn As Long, _
     ByVal strFilePath As String, _
     ByVal strMailSubject As String) As Object
@@ -578,10 +754,8 @@ Private Function BuildInputColumnMap( _
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     arrHeaders = GetInputHeaders()
-
     Set dictExpected = CreateObject("Scripting.Dictionary")
     dictExpected.CompareMode = vbTextCompare
-
     Set dictColumnMap = CreateObject("Scripting.Dictionary")
     dictColumnMap.CompareMode = vbTextCompare
 
@@ -592,7 +766,7 @@ Private Function BuildInputColumnMap( _
     Next lngTargetColumn
 
     For lngColumn = 1 To lngLastColumn
-        strActualHeader = GetHeaderText(wksInput.Cells(INPUT_HEADER_ROW, lngColumn).Value2)
+        strActualHeader = GetHeaderText(arrSheet(INPUT_HEADER_ROW, lngColumn))
         strHeaderKey = NormalizeHeaderName(strActualHeader)
 
         If Len(strHeaderKey) > 0 Then
@@ -629,7 +803,10 @@ ExitPoint:
     Set dictExpected = Nothing
     If errNumber = 0 Then Set BuildInputColumnMap = dictColumnMap
     Set dictColumnMap = Nothing
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -954,132 +1131,6 @@ ErrHandler:
         "currentCapacity;requiredCapacity", lngCapacity, lngRequired)
     GoTo ExitPoint
 End Sub
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-20
-' Parameters:    wkbInput As Excel.Workbook; strWorksheetOptions As String
-' Returns:       Excel.Worksheet
-' Description:   Returns the first matching configured worksheet, using left-to-right priority.
-'-------------------------------------------------------------------------------
-Private Function GetConfiguredInputWorksheet( _
-    ByVal wkbInput As Excel.Workbook, _
-    ByVal strWorksheetOptions As String) As Excel.Worksheet
-
-    Const METHOD_NAME As String = "GetConfiguredInputWorksheet"
-    Dim arrOptions As Variant
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim lngOption As Long
-    Dim strOption As String
-    Dim wksCandidate As Excel.Worksheet
-    Dim wksResult As Excel.Worksheet
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    If wkbInput Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_INPUT_DATA, METHOD_NAME, "Input workbook is not available.")
-    End If
-
-    arrOptions = Split(strWorksheetOptions, ";")
-
-    For lngOption = LBound(arrOptions) To UBound(arrOptions)
-        strOption = Trim$(CStr(arrOptions(lngOption)))
-
-        If Len(strOption) > 0 Then
-            For Each wksCandidate In wkbInput.Worksheets
-                If StrComp(CStr(wksCandidate.Name), strOption, vbTextCompare) = 0 Then
-                    Set wksResult = wksCandidate
-                    Exit For
-                End If
-            Next wksCandidate
-        End If
-
-        If Not wksResult Is Nothing Then Exit For
-    Next lngOption
-
-ExitPoint:
-    Set wksCandidate = Nothing
-    If errNumber = 0 Then Set GetConfiguredInputWorksheet = wksResult
-    Set wksResult = Nothing
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Function
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "worksheetOptions", strWorksheetOptions)
-    GoTo ExitPoint
-End Function
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-08-27
-' Parameters:    wksInput As Excel.Worksheet
-' Returns:       Long
-' Description:   Finds the last non-empty header column on the configured input sheet.
-'-------------------------------------------------------------------------------
-Private Function GetInputLastHeaderColumn(ByVal wksInput As Excel.Worksheet) As Long
-    Const METHOD_NAME As String = "GetInputLastHeaderColumn"
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim lngResult As Long
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    lngResult = wksInput.Cells(INPUT_HEADER_ROW, wksInput.Columns.Count).End(xlToLeft).Column
-
-ExitPoint:
-    If errNumber = 0 Then GetInputLastHeaderColumn = lngResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    Exit Function
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Function
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-08-27
-' Parameters:    wksInput As Excel.Worksheet; lngLastColumn As Long
-' Returns:       Long
-' Description:   Finds the last populated row across all source columns under the header.
-'-------------------------------------------------------------------------------
-Private Function GetInputLastRow(ByVal wksInput As Excel.Worksheet, ByVal lngLastColumn As Long) As Long
-    Const METHOD_NAME As String = "GetInputLastRow"
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim lngColumn As Long
-    Dim lngColumnLastRow As Long
-    Dim lngResult As Long
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    For lngColumn = 1 To lngLastColumn
-        lngColumnLastRow = wksInput.Cells(wksInput.Rows.Count, lngColumn).End(xlUp).Row
-        If lngColumnLastRow > lngResult Then lngResult = lngColumnLastRow
-    Next lngColumn
-
-ExitPoint:
-    If errNumber = 0 Then GetInputLastRow = lngResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    Exit Function
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "lastColumn", lngLastColumn)
-    GoTo ExitPoint
-End Function
-
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
