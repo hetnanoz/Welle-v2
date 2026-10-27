@@ -48,7 +48,9 @@ Public Sub CreateCashTransactionsEmailDraft( _
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     strTeamList = BuildEmailTeamList(arrCombined, colTeams)
-    strSubject = BuildEmailSubject(appConfig.MailSubject, dtRunTimestamp, strTeamList)
+    strSubject = BuildEmailSubject( _
+        appConfig.MailSubject, dtRunTimestamp, strTeamList, _
+        appConfig.CreateTeamFiles)
     strLocalFolder = GetEmailLocalFolder(appConfig, dtRunTimestamp)
     strSharePointUrl = GetEmailSharePointUrl(appConfig)
 
@@ -151,14 +153,16 @@ End Function
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
-' Parameters:    strBaseSubject As String; dtRunTimestamp As Date; strTeamList As String
+' Parameters:    Base subject, run date, Team list and Team-file mode.
 ' Returns:       String
-' Description:   Builds the dynamic Outlook subject with date and affected Teams.
+' Description:   Builds a Team-aware or Combined-only Outlook subject.
 '-------------------------------------------------------------------------------
 Private Function BuildEmailSubject( _
     ByVal strBaseSubject As String, _
     ByVal dtRunTimestamp As Date, _
-    ByVal strTeamList As String) As String
+    ByVal strTeamList As String, _
+    ByVal blnCreateTeamFiles As Boolean) As String
+
     Const METHOD_NAME As String = "BuildEmailSubject"
     Dim errDescription As String
     Dim errNumber As Long
@@ -167,10 +171,14 @@ Private Function BuildEmailSubject( _
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    If Len(strTeamList) > 0 Then
-        strStatus = "Team " & strTeamList
+    If blnCreateTeamFiles Then
+        If Len(strTeamList) > 0 Then
+            strStatus = "Team " & strTeamList
+        Else
+            strStatus = "no teams"
+        End If
     Else
-        strStatus = "no teams"
+        strStatus = "Combined"
     End If
 
     strResult = _
@@ -179,7 +187,9 @@ Private Function BuildEmailSubject( _
 
 ExitPoint:
     If errNumber = 0 Then BuildEmailSubject = strResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -187,7 +197,7 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "hasTeams", Len(strTeamList) > 0)
+        "createTeamFiles;hasTeams", blnCreateTeamFiles, Len(strTeamList) > 0)
     GoTo ExitPoint
 End Function
 
@@ -222,9 +232,13 @@ Private Function BuildEmailBodyHtml( _
 
     lngTransactionCount = UBound(arrCombined, 1) - 1
     lngUnknownCount = CountUnknownTransactions(arrCombined)
-    strUnknownStatus = BuildUnknownStatus(lngUnknownCount)
+    strUnknownStatus = BuildUnknownStatus( _
+        lngUnknownCount, appConfig.CreateTeamFiles, appConfig.UpdateHistorical)
 
-    If Len(strTeamList) > 0 Then
+    If Not appConfig.CreateTeamFiles Then
+        strTeamsToken = "all teams"
+        strTemplate = GetCombinedOnlyMailBody()
+    ElseIf Len(strTeamList) > 0 Then
         strTeamsToken = strTeamList
         strTemplate = appConfig.MailBody
         If Len(strTemplate) = 0 Then strTemplate = GetDefaultMailBody(True)
@@ -337,12 +351,57 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
-' Creation date: 2026-09-01
-' Parameters:    lngUnknownCount As Long
+' Creation date: 2026-10-26
+' Parameters:    ---
 ' Returns:       String
-' Description:   Builds the conditional unknown-transactions message for the email body.
+' Description:   Returns the default email body when only Combined reports are produced.
 '-------------------------------------------------------------------------------
-Private Function BuildUnknownStatus(ByVal lngUnknownCount As Long) As String
+Private Function GetCombinedOnlyMailBody() As String
+    Const METHOD_NAME As String = "GetCombinedOnlyMailBody"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strResult = "Hi All," & vbCrLf & vbCrLf
+    strResult = strResult & _
+        "The daily Cash Transactions processing for [RUN_DATE] has been completed." & vbCrLf
+    strResult = strResult & _
+        "All transactions are available in the Combined report." & vbCrLf
+    strResult = strResult & _
+        "Please use the Team and Fund slicers to review the relevant positions." & _
+        vbCrLf & vbCrLf
+    strResult = strResult & "[UNKNOWN_STATUS]" & vbCrLf & vbCrLf
+    strResult = strResult & _
+        "Files are available in the following location(s):" & vbCrLf
+    strResult = strResult & "[OUTPUT_LOCATIONS]"
+
+ExitPoint:
+    If errNumber = 0 Then GetCombinedOnlyMailBody = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+' Author:        Pawel Ligezka
+' Creation date: 2026-09-01
+' Parameters:    Unknown count, Team-file mode and historical-update flag.
+' Returns:       String
+' Description:   Builds the conditional unknown/unassigned message for the email body.
+'-------------------------------------------------------------------------------
+Private Function BuildUnknownStatus( _
+    ByVal lngUnknownCount As Long, _
+    ByVal blnCreateTeamFiles As Boolean, _
+    ByVal blnUpdateHistorical As Boolean) As String
+
     Const METHOD_NAME As String = "BuildUnknownStatus"
     Dim errDescription As String
     Dim errNumber As Long
@@ -351,18 +410,32 @@ Private Function BuildUnknownStatus(ByVal lngUnknownCount As Long) As String
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     If lngUnknownCount = 0 Then
-        strResult = "There are no unknown transactions requiring manual review."
+        strResult = "There are no unassigned or unknown transactions requiring manual review."
+    ElseIf Not blnCreateTeamFiles Then
+        strResult = "There are " & CStr(lngUnknownCount) & _
+            " unassigned or unknown transaction(s) in the Combined report."
+        strResult = strResult & vbCrLf & _
+            "Please review them using the Team and Fund slicers."
     ElseIf lngUnknownCount = 1 Then
         strResult = "There is 1 unknown transaction requiring manual review."
-        strResult = strResult & vbCrLf & "Please check it manually in " & HISTORICAL_UNKNOWN_FILE & "."
+        If blnUpdateHistorical Then
+            strResult = strResult & vbCrLf & _
+                "Please check it manually in " & HISTORICAL_UNKNOWN_FILE & "."
+        End If
     Else
-        strResult = "There are " & CStr(lngUnknownCount) & " unknown transactions requiring manual review."
-        strResult = strResult & vbCrLf & "Please check them manually in " & HISTORICAL_UNKNOWN_FILE & "."
+        strResult = "There are " & CStr(lngUnknownCount) & _
+            " unknown transactions requiring manual review."
+        If blnUpdateHistorical Then
+            strResult = strResult & vbCrLf & _
+                "Please check them manually in " & HISTORICAL_UNKNOWN_FILE & "."
+        End If
     End If
 
 ExitPoint:
     If errNumber = 0 Then BuildUnknownStatus = strResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -370,7 +443,7 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "unknownCount", lngUnknownCount)
+        "unknownCount;createTeamFiles", lngUnknownCount, blnCreateTeamFiles)
     GoTo ExitPoint
 End Function
 
