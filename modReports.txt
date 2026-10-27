@@ -326,7 +326,7 @@ Private Sub CreateReportWorkbook( _
 
     If blnCombinedReport Then
         Call EnsureCombinedDashboard( _
-            wkbOutput, wksTransactions, lngLastSheetRow)
+            wkbOutput, wksTransactions, lngLastSheetRow, True)
     End If
 
     If blnUnknownReport Then
