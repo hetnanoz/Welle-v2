@@ -106,6 +106,7 @@ Private Sub UpdateHistoricalWorkbook( _
     Dim blnHttpPath As Boolean
     Dim blnLayoutUpgraded As Boolean
     Dim blnNewWorkbook As Boolean
+    Dim blnRestoreReadOnly As Boolean
     Dim dictKeys As Object
     Dim errDescription As String
     Dim errNumber As Long
@@ -127,25 +128,29 @@ Private Sub UpdateHistoricalWorkbook( _
 
     lngCurrentLastRow = UBound(arrCurrent, 1)
     blnHttpPath = IsHttpPath(strHistoricalPath)
-    Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strHistoricalPath, False)
+    Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strHistoricalPath, True)
 
     If Not wkbAlreadyOpen Is Nothing Then
-        If wkbAlreadyOpen.ReadOnly Then
-            Call wkbAlreadyOpen.ChangeFileAccess( _
-                xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
-        End If
-        If wkbAlreadyOpen.ReadOnly Then
-            Call VBA.Err.Raise( _
-                ERROR_HISTORICAL, METHOD_NAME, _
-                "Historical workbook cannot be changed to read/write: " & _
-                strHistoricalPath)
-        End If
         If Not wkbAlreadyOpen.Saved Then
             Call VBA.Err.Raise( _
                 ERROR_HISTORICAL, METHOD_NAME, _
                 "Historical workbook has unsaved user changes. Save or close it " & _
                 "before running the macro: " & strHistoricalPath)
         End If
+
+        If wkbAlreadyOpen.ReadOnly Then
+            blnRestoreReadOnly = True
+            Call wkbAlreadyOpen.ChangeFileAccess( _
+                xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
+        End If
+
+        If wkbAlreadyOpen.ReadOnly Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical workbook is locked and cannot be changed to read/write: " & _
+                strHistoricalPath)
+        End If
+
         Set wkbHistory = wkbAlreadyOpen
     ElseIf blnHttpPath Then
         Set wkbHistory = Application.Workbooks.Open( _
@@ -255,10 +260,11 @@ Private Sub UpdateHistoricalWorkbook( _
 
     Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
 
-    If blnNewWorkbook Or lngNewCount > 0 Or _
-        blnHeaderUpgraded Or blnLayoutUpgraded Then
-
+    If lngNewCount > 0 Then
         lngExistingLastRow = lngExistingLastRow + lngNewCount
+    End If
+
+    If blnNewWorkbook Or blnHeaderUpgraded Or blnLayoutUpgraded Then
         Call AutoFitColumnsWithPadding( _
             wksHistory.Range( _
                 wksHistory.Cells(lngHeaderRow, 1), _
@@ -267,8 +273,13 @@ Private Sub UpdateHistoricalWorkbook( _
     End If
 
     If blnCombinedDashboard Then
-        Call EnsureCombinedDashboard(wkbHistory, wksHistory, lngExistingLastRow)
-        blnDashboardUpdated = True
+        If blnNewWorkbook Or lngNewCount > 0 Or _
+            blnHeaderUpgraded Or blnLayoutUpgraded Then
+
+            Call EnsureCombinedDashboard( _
+                wkbHistory, wksHistory, lngExistingLastRow)
+            blnDashboardUpdated = True
+        End If
     End If
 
     If blnNewWorkbook Or lngNewCount > 0 Or blnHeaderUpgraded Or _
@@ -277,6 +288,11 @@ Private Sub UpdateHistoricalWorkbook( _
         Call ApplyWorkbookSensitivityLabel(wkbHistory)
         Call SaveHistoricalWorkbookProtected( _
             wkbHistory, strHistoricalPath, blnNewWorkbook)
+    End If
+
+    If blnRestoreReadOnly Then
+        Call wkbHistory.ChangeFileAccess(xlReadOnly)
+        blnRestoreReadOnly = False
     End If
 
 ExitPoint:
@@ -614,6 +630,7 @@ Private Sub UpsertReviewedTransaction( _
     Dim blnHeaderUpgraded As Boolean
     Dim blnLayoutUpgraded As Boolean
     Dim blnNewWorkbook As Boolean
+    Dim blnRestoreReadOnly As Boolean
     Dim cleanupErrNumber As Long
     Dim errDescription As String
     Dim errNumber As Long
@@ -629,10 +646,18 @@ Private Sub UpsertReviewedTransaction( _
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strHistoricalPath, False)
+    Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strHistoricalPath, True)
 
     If Not wkbAlreadyOpen Is Nothing Then
+        If Not wkbAlreadyOpen.Saved Then
+            Call VBA.Err.Raise( _
+                ERROR_HISTORICAL, METHOD_NAME, _
+                "Historical workbook has unsaved user changes: " & _
+                strHistoricalPath)
+        End If
+
         If wkbAlreadyOpen.ReadOnly Then
+            blnRestoreReadOnly = True
             Call wkbAlreadyOpen.ChangeFileAccess( _
                 xlReadWrite, OUTPUT_WRITE_PASSWORD, False)
         End If
@@ -640,14 +665,7 @@ Private Sub UpsertReviewedTransaction( _
         If wkbAlreadyOpen.ReadOnly Then
             Call VBA.Err.Raise( _
                 ERROR_HISTORICAL, METHOD_NAME, _
-                "Historical workbook cannot be changed to read/write: " & _
-                strHistoricalPath)
-        End If
-
-        If Not wkbAlreadyOpen.Saved Then
-            Call VBA.Err.Raise( _
-                ERROR_HISTORICAL, METHOD_NAME, _
-                "Historical workbook has unsaved user changes: " & _
+                "Historical workbook is locked and cannot be changed to read/write: " & _
                 strHistoricalPath)
         End If
 
@@ -753,7 +771,12 @@ Private Sub UpsertReviewedTransaction( _
 
     Call ApplyWorkbookSensitivityLabel(wkbHistory)
     Call SaveHistoricalWorkbookProtected( _
-            wkbHistory, strHistoricalPath, blnNewWorkbook)
+        wkbHistory, strHistoricalPath, blnNewWorkbook)
+
+    If blnRestoreReadOnly Then
+        Call wkbHistory.ChangeFileAccess(xlReadOnly)
+        blnRestoreReadOnly = False
+    End If
 
 ExitPoint:
     Set wksHistory = Nothing
@@ -917,5 +940,4 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "padding", dblPadding)
     GoTo ExitPoint
 End Sub
-
 
