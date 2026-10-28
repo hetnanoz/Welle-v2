@@ -16,6 +16,7 @@ Public Sub RunDallasCashTransactions()
     Dim blnEmailDraftCreated As Boolean
     Dim blnEmailLabelApplied As Boolean
     Dim cleanupErrNumber As Long
+    Dim enableEventsCleanupErrNumber As Long
     Dim blnPreviousAskToUpdateLinks As Boolean
     Dim blnPreviousDisplayAlerts As Boolean
     Dim blnPreviousEnableEvents As Boolean
@@ -162,13 +163,19 @@ ExitPoint:
     Set colAttachmentPaths = Nothing
 
     If blnStateCaptured Then
+        enableEventsCleanupErrNumber = RestoreEnableEventsSafely( _
+            blnPreviousEnableEvents, errNumber = 0)
+
         cleanupErrNumber = RestoreApplicationStateSafely( _
             varPreviousStatusBar, lngPreviousAutomationSecurity, _
             xlPreviousCalculation, blnPreviousAskToUpdateLinks, _
-            blnPreviousDisplayAlerts, blnPreviousEnableEvents, _
-            blnPreviousScreenUpdating, errNumber = 0)
+            blnPreviousDisplayAlerts, blnPreviousScreenUpdating, _
+            errNumber = 0)
 
-        If errNumber = 0 And cleanupErrNumber <> 0 Then
+        If errNumber = 0 And enableEventsCleanupErrNumber <> 0 Then
+            errNumber = enableEventsCleanupErrNumber
+            errDescription = "Excel EnableEvents state could not be restored."
+        ElseIf errNumber = 0 And cleanupErrNumber <> 0 Then
             errNumber = cleanupErrNumber
             errDescription = "Excel application state could not be fully restored."
         End If
@@ -352,6 +359,44 @@ ErrHandler:
     GoTo ExitPoint
 End Function
 
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-28
+' Parameters:    Previous EnableEvents state and whether cleanup errors may log.
+' Returns:       Long
+' Description:   Restores Excel events independently so another cleanup failure
+'                cannot leave Application.EnableEvents disabled.
+'-------------------------------------------------------------------------------
+Private Function RestoreEnableEventsSafely( _
+    ByVal blnPreviousEnableEvents As Boolean, _
+    ByVal blnLogCleanupError As Boolean) As Long
+
+    Const METHOD_NAME As String = "RestoreEnableEventsSafely"
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Application.EnableEvents = blnPreviousEnableEvents
+
+ExitPoint:
+    RestoreEnableEventsSafely = errNumber
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+
+    If blnLogCleanupError Then
+        Call ErrorManager.addError( _
+            CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    End If
+
+    ' Cleanup helper: return the cleanup error rather than re-raising it.
+    GoTo ExitPoint
+End Function
+
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-20
@@ -366,7 +411,6 @@ Private Function RestoreApplicationStateSafely( _
     ByVal xlPreviousCalculation As XlCalculation, _
     ByVal blnPreviousAskToUpdateLinks As Boolean, _
     ByVal blnPreviousDisplayAlerts As Boolean, _
-    ByVal blnPreviousEnableEvents As Boolean, _
     ByVal blnPreviousScreenUpdating As Boolean, _
     ByVal blnLogCleanupError As Boolean) As Long
 
@@ -381,7 +425,6 @@ Private Function RestoreApplicationStateSafely( _
     Application.Calculation = xlPreviousCalculation
     Application.AskToUpdateLinks = blnPreviousAskToUpdateLinks
     Application.DisplayAlerts = blnPreviousDisplayAlerts
-    Application.EnableEvents = blnPreviousEnableEvents
     Application.ScreenUpdating = blnPreviousScreenUpdating
 
 ExitPoint:
@@ -401,4 +444,5 @@ ErrHandler:
     ' error to ErrorManager because that could hide the primary user-facing error.
     GoTo ExitPoint
 End Function
+
 
