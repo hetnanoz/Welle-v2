@@ -69,6 +69,7 @@ Public Sub CreateCashTransactionsEmailDraft( _
     objMail.To = appConfig.MailTo
     objMail.Cc = appConfig.MailCc
     objMail.Subject = strSubject
+    objMail.BodyFormat = 2  ' olFormatHTML; keep late binding.
 
     objMail.Display
     strSignatureHtml = CStr(objMail.HTMLBody)
@@ -217,13 +218,14 @@ Private Function BuildEmailBodyHtml( _
     ByVal strSharePointUrl As String, _
     ByVal strSharePointFolder As String) As String
     Const METHOD_NAME As String = "BuildEmailBodyHtml"
-    Const OUTPUT_LOCATIONS_PLACEHOLDER As String = "[[OUTPUT_LOCATIONS_TOKEN]]"
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngTransactionCount As Long
     Dim lngUnknownCount As Long
+    Dim rngTemplate As Excel.Range
     Dim strOutputLocationsHtml As String
     Dim strResult As String
+    Dim strSelectedName As String
     Dim strTeamsToken As String
     Dim strTemplate As String
     Dim strUnknownStatus As String
@@ -236,64 +238,39 @@ Private Function BuildEmailBodyHtml( _
         lngUnknownCount, appConfig.CreateTeamFiles, appConfig.UpdateHistorical)
 
     If Not appConfig.CreateTeamFiles Then
+        strSelectedName = NAME_MAIL_BODY_COMBINED_ONLY
         strTeamsToken = "all teams"
         strTemplate = appConfig.MailBodyCombinedOnly
         If Len(strTemplate) = 0 Then strTemplate = GetCombinedOnlyMailBody()
     ElseIf Len(strTeamList) > 0 Then
+        strSelectedName = NAME_MAIL_BODY
         strTeamsToken = strTeamList
         strTemplate = appConfig.MailBody
         If Len(strTemplate) = 0 Then strTemplate = GetDefaultMailBody(True)
     Else
+        strSelectedName = NAME_MAIL_BODY_NO_TEAMS
         strTeamsToken = "no teams"
         strTemplate = appConfig.MailBodyNoTeams
         If Len(strTemplate) = 0 Then strTemplate = GetDefaultMailBody(False)
     End If
 
-    ' Backward compatibility with the previous Mapping templates.
-    strTemplate = Replace$( _
-        strTemplate, "Files are available on SharePoint:", _
-        "Files are available in the following location(s):", _
-        1, -1, vbTextCompare)
-    strTemplate = Replace$( _
-        strTemplate, "SharePoint: [SHAREPOINT_URL]", _
-        "[OUTPUT_LOCATIONS]", 1, -1, vbTextCompare)
-    strTemplate = Replace$(strTemplate, "[SHAREPOINT_URL]", "[OUTPUT_LOCATIONS]", 1, -1, vbTextCompare)
-
-    If InStr(1, strTemplate, "[OUTPUT_LOCATIONS]", vbTextCompare) = 0 Then
-        strTemplate = _
-            strTemplate & vbCrLf & vbCrLf & _
-            "Files are available in the following location(s):" & _
-            vbCrLf & "[OUTPUT_LOCATIONS]"
-    End If
-
-    strTemplate = Replace$(strTemplate, "[RUN_DATE]", Format$(dtRunTimestamp, "dd/mm/yyyy"))
-    strTemplate = Replace$(strTemplate, "[CHECK_DATE]", Format$(dtRunTimestamp, "dd/mm/yyyy"))
-    strTemplate = Replace$(strTemplate, "[TEAMS]", strTeamsToken)
-    strTemplate = Replace$(strTemplate, "[LOCAL_FOLDER]", strLocalFolder)
-    strTemplate = Replace$(strTemplate, "[TRANSACTION_COUNT]", CStr(lngTransactionCount))
-    strTemplate = Replace$(strTemplate, "[UNKNOWN_COUNT]", CStr(lngUnknownCount))
-    strTemplate = Replace$(strTemplate, "[UNKNOWN_MASTER_FILE]", HISTORICAL_UNKNOWN_FILE)
-    strTemplate = Replace$(strTemplate, "[UNKNOWN_STATUS]", strUnknownStatus)
-    strTemplate = Replace$( _
-        strTemplate, "[OUTPUT_LOCATIONS]", OUTPUT_LOCATIONS_PLACEHOLDER, _
-        1, -1, vbTextCompare)
-
-    strResult = HtmlEncode(strTemplate)
-    strResult = Replace$(strResult, vbCrLf, "<br>")
-    strResult = Replace$(strResult, vbLf, "<br>")
-
+    ' Match the chosen Mapping cell to the text already validated by modConfig.
+    ' Built-in fallback bodies remain plain when no Mapping text was provided.
+    Set rngTemplate = GetMappingMailTemplateCell(strSelectedName, strTemplate)
     strOutputLocationsHtml = BuildOutputLocationsHtml( _
         appConfig, strLocalFolder, strSharePointUrl, strSharePointFolder)
 
-    ' The email notice is fully controlled by the selected Mapping mail body.
-    ' Keep the output-location hyperlinks, without appending a hardcoded notice.
-    strResult = Replace$( _
-        strResult, HtmlEncode(OUTPUT_LOCATIONS_PLACEHOLDER), _
-        strOutputLocationsHtml)
+    strResult = RenderMailTemplateHtml( _
+        strTemplate, rngTemplate, Format$(dtRunTimestamp, "dd/mm/yyyy"), _
+        strTeamsToken, strLocalFolder, lngTransactionCount, _
+        lngUnknownCount, strUnknownStatus, strOutputLocationsHtml)
 
 ExitPoint:
+    Set rngTemplate = Nothing
     If errNumber = 0 Then BuildEmailBodyHtml = strResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -301,7 +278,378 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "hasTeams", Len(strTeamList) > 0)
+        "selectedTemplate", strSelectedName)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strName As String; strExpectedText As String
+' Returns:       Excel.Range or Nothing
+' Description:   Resolves the selected one-cell Mapping template for rich-text access.
+'-------------------------------------------------------------------------------
+Private Function GetMappingMailTemplateCell( _
+    ByVal strName As String, _
+    ByVal strExpectedText As String) As Excel.Range
+    Const METHOD_NAME As String = "GetMappingMailTemplateCell"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngSeparator As Long
+    Dim objName As Excel.Name
+    Dim rngCandidate As Excel.Range
+    Dim rngResult As Excel.Range
+    Dim strCellText As String
+    Dim strSimpleName As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each objName In ThisWorkbook.Names
+        strSimpleName = CStr(objName.Name)
+        lngSeparator = InStrRev(strSimpleName, "!")
+        If lngSeparator > 0 Then
+            strSimpleName = Mid$(strSimpleName, lngSeparator + 1)
+        End If
+        strSimpleName = Replace$(strSimpleName, "'", vbNullString)
+
+        If StrComp(strSimpleName, strName, vbTextCompare) = 0 Then
+            Set rngCandidate = objName.RefersToRange
+
+            If rngCandidate.Cells.CountLarge = 1 Then
+                If StrComp(CStr(rngCandidate.Parent.Name), SHEET_MAPPING, vbTextCompare) = 0 Then
+                    If Not IsError(rngCandidate.Value2) Then
+                        strCellText = Trim$(CStr(rngCandidate.Value2))
+                        If StrComp(strCellText, strExpectedText, vbBinaryCompare) = 0 Then
+                            Set rngResult = rngCandidate
+                            Exit For
+                        End If
+                    End If
+                End If
+            End If
+            Set rngCandidate = Nothing
+        End If
+    Next objName
+
+ExitPoint:
+    If errNumber = 0 Then Set GetMappingMailTemplateCell = rngResult
+    Set rngCandidate = Nothing
+    Set rngResult = Nothing
+    Set objName = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "name", strName)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    Mapping body, source cell and dynamic replacement values.
+' Returns:       String
+' Description:   Preserves Excel character formatting while safely generating HTML.
+'-------------------------------------------------------------------------------
+Private Function RenderMailTemplateHtml( _
+    ByVal strTemplate As String, _
+    ByVal rngTemplate As Excel.Range, _
+    ByVal strRunDate As String, _
+    ByVal strTeams As String, _
+    ByVal strLocalFolder As String, _
+    ByVal lngTransactionCount As Long, _
+    ByVal lngUnknownCount As Long, _
+    ByVal strUnknownStatus As String, _
+    ByVal strOutputLocationsHtml As String) As String
+    Const METHOD_NAME As String = "RenderMailTemplateHtml"
+    Const LEGACY_HEADER As String = "Files are available on SharePoint:"
+    Const NEW_HEADER As String = "Files are available in the following location(s):"
+    Const LEGACY_SHAREPOINT_LINE As String = "SharePoint: [SHAREPOINT_URL]"
+    Dim blnHasOutputToken As Boolean
+    Dim blnUseRichText As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngCellOffset As Long
+    Dim lngConsumed As Long
+    Dim lngPosition As Long
+    Dim strCurrentCss As String
+    Dim strFragment As String
+    Dim strNextCss As String
+    Dim strOriginalCell As String
+    Dim strResult As String
+    Dim strValue As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    blnHasOutputToken = _
+        InStr(1, strTemplate, "[OUTPUT_LOCATIONS]", vbTextCompare) > 0 Or _
+        InStr(1, strTemplate, "[SHAREPOINT_URL]", vbTextCompare) > 0
+
+    If Not rngTemplate Is Nothing Then
+        strOriginalCell = CStr(rngTemplate.Value2)
+        If StrComp(Trim$(strOriginalCell), strTemplate, vbBinaryCompare) = 0 Then
+            lngCellOffset = InStr(1, strOriginalCell, strTemplate, vbBinaryCompare) - 1
+            blnUseRichText = lngCellOffset >= 0
+        End If
+    End If
+
+    lngPosition = 1
+    Do While lngPosition <= Len(strTemplate)
+        lngConsumed = 1
+        strValue = vbNullString
+        strFragment = vbNullString
+
+        Select Case True
+            Case StartsWithMailToken(strTemplate, lngPosition, LEGACY_SHAREPOINT_LINE, True)
+                lngConsumed = Len(LEGACY_SHAREPOINT_LINE)
+                strFragment = strOutputLocationsHtml
+            Case StartsWithMailToken(strTemplate, lngPosition, LEGACY_HEADER, True)
+                lngConsumed = Len(LEGACY_HEADER)
+                strValue = NEW_HEADER
+            Case StartsWithMailToken(strTemplate, lngPosition, "[OUTPUT_LOCATIONS]", True)
+                lngConsumed = Len("[OUTPUT_LOCATIONS]")
+                strFragment = strOutputLocationsHtml
+            Case StartsWithMailToken(strTemplate, lngPosition, "[SHAREPOINT_URL]", True)
+                lngConsumed = Len("[SHAREPOINT_URL]")
+                strFragment = strOutputLocationsHtml
+            Case StartsWithMailToken(strTemplate, lngPosition, "[RUN_DATE]", False)
+                lngConsumed = Len("[RUN_DATE]")
+                strValue = strRunDate
+            Case StartsWithMailToken(strTemplate, lngPosition, "[CHECK_DATE]", False)
+                lngConsumed = Len("[CHECK_DATE]")
+                strValue = strRunDate
+            Case StartsWithMailToken(strTemplate, lngPosition, "[TEAMS]", False)
+                lngConsumed = Len("[TEAMS]")
+                strValue = strTeams
+            Case StartsWithMailToken(strTemplate, lngPosition, "[LOCAL_FOLDER]", False)
+                lngConsumed = Len("[LOCAL_FOLDER]")
+                strValue = strLocalFolder
+            Case StartsWithMailToken(strTemplate, lngPosition, "[TRANSACTION_COUNT]", False)
+                lngConsumed = Len("[TRANSACTION_COUNT]")
+                strValue = CStr(lngTransactionCount)
+            Case StartsWithMailToken(strTemplate, lngPosition, "[UNKNOWN_COUNT]", False)
+                lngConsumed = Len("[UNKNOWN_COUNT]")
+                strValue = CStr(lngUnknownCount)
+            Case StartsWithMailToken(strTemplate, lngPosition, "[UNKNOWN_MASTER_FILE]", False)
+                lngConsumed = Len("[UNKNOWN_MASTER_FILE]")
+                strValue = HISTORICAL_UNKNOWN_FILE
+            Case StartsWithMailToken(strTemplate, lngPosition, "[UNKNOWN_STATUS]", False)
+                lngConsumed = Len("[UNKNOWN_STATUS]")
+                strValue = strUnknownStatus
+            Case Else
+                strValue = Mid$(strTemplate, lngPosition, 1)
+                If strValue = vbCr Then
+                    If Mid$(strTemplate, lngPosition + 1, 1) = vbLf Then lngConsumed = 2
+                    strFragment = "<br>"
+                ElseIf strValue = vbLf Then
+                    strFragment = "<br>"
+                End If
+        End Select
+
+        ' Dynamic text is encoded. Only location links from our own helper use raw HTML.
+        If Len(strFragment) = 0 Then strFragment = EncodeMailTextAsHtml(strValue)
+
+        strNextCss = vbNullString
+        If blnUseRichText Then
+            strNextCss = GetMappingCharacterCss(rngTemplate, lngCellOffset + lngPosition)
+        End If
+
+        If StrComp(strNextCss, strCurrentCss, vbBinaryCompare) <> 0 Then
+            If Len(strCurrentCss) > 0 Then strResult = strResult & "</span>"
+            If Len(strNextCss) > 0 Then
+                strResult = strResult & "<span style='" & strNextCss & "'>"
+            End If
+            strCurrentCss = strNextCss
+        End If
+
+        strResult = strResult & strFragment
+        lngPosition = lngPosition + lngConsumed
+    Loop
+
+    If Len(strCurrentCss) > 0 Then strResult = strResult & "</span>"
+
+    If Not blnHasOutputToken Then
+        strResult = strResult & "<br><br>" & NEW_HEADER & "<br>" & strOutputLocationsHtml
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then RenderMailTemplateHtml = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "characterPosition", lngPosition)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strText, lngStart, strToken, blnIgnoreCase
+' Returns:       Boolean
+' Description:   Checks whether a complete placeholder begins at this position.
+'-------------------------------------------------------------------------------
+Private Function StartsWithMailToken( _
+    ByVal strText As String, _
+    ByVal lngStart As Long, _
+    ByVal strToken As String, _
+    ByVal blnIgnoreCase As Boolean) As Boolean
+    Const METHOD_NAME As String = "StartsWithMailToken"
+    Dim blnResult As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngCompareMode As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    lngCompareMode = vbBinaryCompare
+    If blnIgnoreCase Then lngCompareMode = vbTextCompare
+
+    If lngStart + Len(strToken) - 1 <= Len(strText) Then
+        blnResult = StrComp( _
+            Mid$(strText, lngStart, Len(strToken)), _
+            strToken, lngCompareMode) = 0
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then StartsWithMailToken = blnResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "position", lngStart)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strText As String
+' Returns:       String
+' Description:   Encodes cell text and preserves Excel line breaks in HTML.
+'-------------------------------------------------------------------------------
+Private Function EncodeMailTextAsHtml(ByVal strText As String) As String
+    Const METHOD_NAME As String = "EncodeMailTextAsHtml"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strResult = HtmlEncode(strText)
+    strResult = Replace$(strResult, vbCrLf, "<br>")
+    strResult = Replace$(strResult, vbCr, "<br>")
+    strResult = Replace$(strResult, vbLf, "<br>")
+
+ExitPoint:
+    If errNumber = 0 Then EncodeMailTextAsHtml = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    rngTemplate As Excel.Range; lngPosition As Long
+' Returns:       String
+' Description:   Converts explicit Excel character font properties into CSS.
+'-------------------------------------------------------------------------------
+Private Function GetMappingCharacterCss( _
+    ByVal rngTemplate As Excel.Range, _
+    ByVal lngPosition As Long) As String
+    Const METHOD_NAME As String = "GetMappingCharacterCss"
+    Dim blnStrike As Boolean
+    Dim blnUnderlined As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColor As Long
+    Dim objFont As Excel.Font
+    Dim strFontName As String
+    Dim strResult As String
+    Dim strSize As String
+    Dim varColor As Variant
+    Dim varColorIndex As Variant
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set objFont = rngTemplate.Characters(lngPosition, 1).Font
+
+    strFontName = Trim$(CStr(objFont.Name))
+    If Len(strFontName) > 0 Then
+        strResult = "font-family:&quot;" & HtmlEncode(strFontName) & "&quot;;"
+    End If
+
+    If IsNumeric(objFont.Size) Then
+        strSize = Replace$(Format$(CDbl(objFont.Size), "0.0"), ",", ".")
+        strResult = strResult & "font-size:" & strSize & "pt;"
+    End If
+
+    If CBool(objFont.Bold) Then strResult = strResult & "font-weight:bold;"
+    If CBool(objFont.Italic) Then strResult = strResult & "font-style:italic;"
+
+    blnUnderlined = (CLng(objFont.Underline) <> xlUnderlineStyleNone)
+    blnStrike = CBool(objFont.Strikethrough)
+    If blnUnderlined And blnStrike Then
+        strResult = strResult & "text-decoration:underline line-through;"
+    ElseIf blnUnderlined Then
+        strResult = strResult & "text-decoration:underline;"
+    ElseIf blnStrike Then
+        strResult = strResult & "text-decoration:line-through;"
+    End If
+
+    varColorIndex = objFont.ColorIndex
+    If Not IsNull(varColorIndex) Then
+        If CLng(varColorIndex) <> xlColorIndexAutomatic Then
+            varColor = objFont.Color
+            If IsNumeric(varColor) Then
+                lngColor = CLng(varColor)
+                strResult = strResult & "color:#" & _
+                    Right$("0" & Hex$(lngColor And &HFF&), 2) & _
+                    Right$("0" & Hex$((lngColor \ &H100&) And &HFF&), 2) & _
+                    Right$("0" & Hex$((lngColor \ &H10000) And &HFF&), 2) & ";"
+            End If
+        End If
+    End If
+
+ExitPoint:
+    Set objFont = Nothing
+    If errNumber = 0 Then GetMappingCharacterCss = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "characterPosition", lngPosition)
     GoTo ExitPoint
 End Function
 
