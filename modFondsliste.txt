@@ -6,37 +6,57 @@ Private Const CLASS_NAME As String = "modFondsliste"
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
 ' Parameters:    appConfig As TAppConfig
-' Returns:       String
-' Description:   Resolves the latest configured Fondsliste file.
+' Returns:       String - full path to the one configured Fondsliste file
+' Description:   Finds only the exact configured base name and extension.
+'                Keeps the original public name for modMain compatibility.
 '-------------------------------------------------------------------------------
 Public Function GetLatestFondslistePath(ByRef appConfig As TAppConfig) As String
     Const METHOD_NAME As String = "GetLatestFondslistePath"
+    Dim dtStepStarted As Date
     Dim errDescription As String
     Dim errNumber As Long
+    Dim strExpectedFile As String
     Dim strFolderPath As String
+    Dim strFoundFile As String
     Dim strResult As String
-    Dim strSearchPattern As String
-    Dim dtStepStarted As Date
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     dtStepStarted = Now
     strFolderPath = ResolveConfiguredPath(appConfig.FondslisteFolder)
-    strSearchPattern = BuildFondslisteSearchPattern( _
+    strExpectedFile = BuildExactFondslisteFileName( _
         appConfig.FondslistePattern, appConfig.FondslisteExtension)
+
+    Debug.Print "Dallas PERF | Fondsliste FIXED expected | " & strExpectedFile
     Debug.Print "Dallas PERF | Fondsliste resolve settings | " & _
         CStr(DateDiff("s", dtStepStarted, Now)) & " s"
-    strResult = GetLatestFile(strFolderPath, strSearchPattern)
 
-    If Len(strResult) = 0 Then
+    ' Dir$ uses an exact full file path, without a wildcard or a folder scan.
+    dtStepStarted = Now
+    strResult = CombinePath(strFolderPath, strExpectedFile)
+    strFoundFile = Dir$( _
+        strResult, vbNormal Or vbReadOnly Or vbHidden Or vbSystem Or vbArchive)
+
+    Debug.Print "Dallas PERF | Fondsliste FIXED file lookup | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
+
+    ' Check Dir$ output as well; no short-name/wildcard-like match is accepted.
+    If Len(strFoundFile) = 0 Or _
+        StrComp(strFoundFile, strExpectedFile, vbTextCompare) <> 0 Then
         Call VBA.Err.Raise( _
             ERROR_FONDSLISTE, METHOD_NAME, _
-            "No matching Fondsliste file was found.")
+            "Required FIXED Fondsliste file not found: " & strExpectedFile & _
+            ". Folder: " & strFolderPath & ". No other file will be used.")
     End If
+
+    strResult = CombinePath(strFolderPath, strFoundFile)
 
 ExitPoint:
     If errNumber = 0 Then GetLatestFondslistePath = strResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -44,7 +64,7 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "folder;pattern;extension", _
+        "folder;baseName;extension", _
         appConfig.FondslisteFolder, appConfig.FondslistePattern, _
         appConfig.FondslisteExtension)
     GoTo ExitPoint
@@ -52,52 +72,75 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
-' Creation date: 2026-08-26
-' Parameters:    strFilePattern As String; strFileExtension As String
-' Returns:       String
-' Description:   Combines a configured Fondsliste prefix or pattern with extension.
+' Creation date: 2026-10-29
+' Parameters:    strFileName - exact base name, without extension
+'                strFileExtension - exact extension, with or without leading dot
+' Returns:       String - exact file name, including extension
+' Description:   Rejects wildcard, path characters and duplicate extension.
 '-------------------------------------------------------------------------------
-Private Function BuildFondslisteSearchPattern( _
-    ByVal strFilePattern As String, _
+Private Function BuildExactFondslisteFileName( _
+    ByVal strFileName As String, _
     ByVal strFileExtension As String) As String
-    Const METHOD_NAME As String = "BuildFondslisteSearchPattern"
-    Dim blnContainsWildcard As Boolean
+    Const METHOD_NAME As String = "BuildExactFondslisteFileName"
+    Const INVALID_FILE_NAME_CHARS As String = "\/:*?""<>|"
     Dim errDescription As String
     Dim errNumber As Long
+    Dim lngIndex As Long
+    Dim strBaseName As String
+    Dim strCharacter As String
     Dim strExtension As String
-    Dim strPattern As String
     Dim strResult As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    strPattern = Trim$(strFilePattern)
+    strBaseName = Trim$(strFileName)
     strExtension = Trim$(strFileExtension)
 
-    If Len(strPattern) = 0 Then
+    If Len(strBaseName) = 0 Then
         Call VBA.Err.Raise( _
-            ERROR_FONDSLISTE, METHOD_NAME, "Fondsliste file pattern is blank.")
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "Fondsliste FIXED base file name cannot be blank.")
     End If
     If Len(strExtension) = 0 Then
         Call VBA.Err.Raise( _
-            ERROR_FONDSLISTE, METHOD_NAME, _
-            "Fondsliste file extension is blank.")
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "FONDSLISTE_EXTENSION cannot be blank.")
     End If
     If Left$(strExtension, 1) <> "." Then strExtension = "." & strExtension
 
-    blnContainsWildcard = _
-        InStr(1, strPattern, "*", vbBinaryCompare) > 0 Or _
-        InStr(1, strPattern, "?", vbBinaryCompare) > 0
+    For lngIndex = 1 To Len(INVALID_FILE_NAME_CHARS)
+        strCharacter = Mid$(INVALID_FILE_NAME_CHARS, lngIndex, 1)
+        If InStr(1, strBaseName, strCharacter, vbBinaryCompare) > 0 Or _
+           InStr(1, strExtension, strCharacter, vbBinaryCompare) > 0 Then
+            Call VBA.Err.Raise( _
+                ERROR_CONFIGURATION, METHOD_NAME, _
+                "FIXED Fondsliste name/extension contains an invalid character: " & _
+                strCharacter)
+        End If
+    Next lngIndex
 
-    If blnContainsWildcard Then
-        strResult = strPattern
-        If Not EndsWithText(strResult, strExtension) Then strResult = strResult & strExtension
-    Else
-        strResult = strPattern & "*" & strExtension
+    If strBaseName = "." Or strBaseName = ".." Or _
+        Right$(strBaseName, 1) = "." Or _
+        InStr(2, strExtension, ".", vbBinaryCompare) > 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "Use the base file name without extension and one extension, e.g. .xls.")
     End If
 
+    If EndsWithText(strBaseName, strExtension) Then
+        Call VBA.Err.Raise( _
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "Fondsliste base name must not include FONDSLISTE_EXTENSION.")
+    End If
+
+    strResult = strBaseName & strExtension
+
 ExitPoint:
-    If errNumber = 0 Then BuildFondslisteSearchPattern = strResult
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber = 0 Then BuildExactFondslisteFileName = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -105,7 +148,7 @@ ErrHandler:
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "filePattern;fileExtension", strFilePattern, strFileExtension)
+        "baseName;extension", strFileName, strFileExtension)
     GoTo ExitPoint
 End Function
 
