@@ -33,6 +33,7 @@ Public Sub RunDallasCashTransactions()
     Dim errNumber As Long
     Dim lngArchivedMailCount As Long
     Dim lngPreviousAutomationSecurity As Long
+    Dim strCurrentStage As String
     Dim strInputFolder As String
     Dim strLatestFondslistePath As String
     Dim strResolvedLocalOutputFolder As String
@@ -45,6 +46,7 @@ Public Sub RunDallasCashTransactions()
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
+    strCurrentStage = "capturing Excel application state"
     blnPreviousScreenUpdating = Application.ScreenUpdating
     blnPreviousEnableEvents = Application.EnableEvents
     blnPreviousDisplayAlerts = Application.DisplayAlerts
@@ -61,6 +63,7 @@ Public Sub RunDallasCashTransactions()
     lngPreviousAutomationSecurity = Application.AutomationSecurity
     blnStateCaptured = True
 
+    strCurrentStage = "applying Excel performance settings"
     Application.ScreenUpdating = False
     Application.EnableEvents = False
     Application.DisplayAlerts = False
@@ -69,31 +72,39 @@ Public Sub RunDallasCashTransactions()
     Application.AutomationSecurity = AUTOMATION_SECURITY_FORCE_DISABLE
     Application.StatusBar = "Dallas Cash Transactions: reading configuration..."
 
+    strCurrentStage = "reading configuration"
     dtRunTimestamp = Now
     Call LoadConfiguration(appConfig)
+    strCurrentStage = "creating run workspace"
     strStageWorkspace = CreateRunWorkspace(dtRunTimestamp)
     strInputFolder = CreateInputWorkingFolder(appConfig, dtRunTimestamp, strStageWorkspace)
 
+    strCurrentStage = "downloading Outlook attachments"
     Application.StatusBar = _
         "Dallas Cash Transactions: downloading Outlook attachments to daily Input folder..."
     Set colAttachmentPaths = DownloadCashTransactionAttachments( _
         appConfig, strInputFolder, dictAttachmentSubjects, dictProcessedMailSubjects)
 
+    strCurrentStage = "merging input files"
     Application.StatusBar = "Dallas Cash Transactions: merging input files from disk..."
     arrCombined = MergeInputFiles(colAttachmentPaths, appConfig.InputWorksheetName, dictAttachmentSubjects)
 
+    strCurrentStage = "deduplicating current transactions"
     Application.StatusBar = "Dallas Cash Transactions: removing duplicate transactions..."
     arrCombined = DeduplicateCurrentTransactions(arrCombined)
 
+    strCurrentStage = "loading latest Fondsliste"
     Application.StatusBar = "Dallas Cash Transactions: loading the latest Fondsliste..."
     strLatestFondslistePath = GetLatestFondslistePath(appConfig)
     Set dictFundTeams = BuildOpenFundTeamDictionary(strLatestFondslistePath)
 
+    strCurrentStage = "updating Static_Data and enriching transactions"
     Application.StatusBar = "Dallas Cash Transactions: updating Static_Data..."
     Call UpdateStaticDataFromFondsliste(dictFundTeams)
     Set dictAccounts = BuildAccountMappingDictionary()
     Call EnrichTransactions(arrCombined, dictAccounts)
 
+    strCurrentStage = "building output destinations"
     Set colTeams = ParseSupportedTeams(appConfig.SupportedTeams)
     Set colDestinationRoots = BuildDestinationRoots(appConfig)
 
@@ -108,6 +119,7 @@ Public Sub RunDallasCashTransactions()
     End If
 
     If appConfig.ArchiveInputFiles Then
+        strCurrentStage = "archiving source input files"
         Application.StatusBar = _
             "Dallas Cash Transactions: archiving source input files..."
         Call PublishInputFilesToDailyFolders( _
@@ -115,12 +127,14 @@ Public Sub RunDallasCashTransactions()
             DateValue(dtRunTimestamp), strInputFolder)
     End If
 
+    strCurrentStage = "creating daily reports"
     Application.StatusBar = "Dallas Cash Transactions: creating daily reports..."
     Call CreateDailyReports( _
         arrCombined, colTeams, colDestinationRoots, dtRunTimestamp, _
         strStageWorkspace, appConfig.CreateTeamFiles)
 
     If appConfig.UpdateHistorical Then
+        strCurrentStage = "updating historical master files"
         Application.StatusBar = "Dallas Cash Transactions: updating historical master files..."
         Call UpdateHistoricalFiles( _
             arrCombined, colTeams, colDestinationRoots, _
@@ -128,6 +142,7 @@ Public Sub RunDallasCashTransactions()
     End If
 
     If appConfig.CreateEmailDraft Then
+        strCurrentStage = "creating Outlook email draft"
         Application.StatusBar = "Dallas Cash Transactions: creating Outlook email draft..."
         Call CreateCashTransactionsEmailDraft( _
             appConfig, arrCombined, colTeams, dtRunTimestamp, blnEmailLabelApplied)
@@ -135,17 +150,20 @@ Public Sub RunDallasCashTransactions()
     End If
 
     If appConfig.ArchiveOutlookMessages Then
+        strCurrentStage = "archiving processed Outlook messages"
         Application.StatusBar = _
             "Dallas Cash Transactions: archiving processed Outlook messages..."
         lngArchivedMailCount = ArchiveProcessedOutlookMessages( _
             appConfig, dictProcessedMailSubjects)
     End If
 
+    strCurrentStage = "cleaning temporary workspace"
     If Len(strStageWorkspace) > 0 Then
         Call DeleteFolderIfExists(strStageWorkspace)
         strStageWorkspace = vbNullString
     End If
 
+    strCurrentStage = "building success summary"
     strSuccessMessage = BuildSuccessMessage( _
         arrCombined, colTeams, colAttachmentPaths.Count, _
         lngArchivedMailCount, appConfig.ArchiveInputFiles, _
@@ -192,10 +210,21 @@ ExitPoint:
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
+
+    If Len(Trim$(errDescription)) = 0 Then
+        errDescription = "Unspecified VBA error."
+    End If
+
+    If Len(strCurrentStage) = 0 Then strCurrentStage = "initialization"
+    errDescription = _
+        "Stage: " & strCurrentStage & ". Error " & _
+        CStr(errNumber) & ": " & errDescription
+
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "inputFolder;stageWorkspace;fondslistePath", _
-        strInputFolder, strStageWorkspace, strLatestFondslistePath)
+        "stage;inputFolder;stageWorkspace;fondslistePath", _
+        strCurrentStage, strInputFolder, strStageWorkspace, _
+        strLatestFondslistePath)
     GoTo ExitPoint
 End Sub
 
@@ -387,6 +416,9 @@ ExitPoint:
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
+    errDescription = _
+        "Cleanup stage: restore Application.EnableEvents. Error " & _
+        CStr(errNumber) & ": " & errDescription
 
     If blnLogCleanupError Then
         Call ErrorManager.addError( _
@@ -417,14 +449,21 @@ Private Function RestoreApplicationStateSafely( _
     Const METHOD_NAME As String = "RestoreApplicationStateSafely"
     Dim errDescription As String
     Dim errNumber As Long
+    Dim strCleanupStage As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
+    strCleanupStage = "restore Application.StatusBar"
     Application.StatusBar = varPreviousStatusBar
+    strCleanupStage = "restore Application.AutomationSecurity"
     Application.AutomationSecurity = lngPreviousAutomationSecurity
+    strCleanupStage = "restore Application.Calculation"
     Application.Calculation = xlPreviousCalculation
+    strCleanupStage = "restore Application.AskToUpdateLinks"
     Application.AskToUpdateLinks = blnPreviousAskToUpdateLinks
+    strCleanupStage = "restore Application.DisplayAlerts"
     Application.DisplayAlerts = blnPreviousDisplayAlerts
+    strCleanupStage = "restore Application.ScreenUpdating"
     Application.ScreenUpdating = blnPreviousScreenUpdating
 
 ExitPoint:
@@ -434,9 +473,13 @@ ExitPoint:
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
+    errDescription = _
+        "Cleanup stage: " & strCleanupStage & ". Error " & _
+        CStr(errNumber) & ": " & errDescription
     If blnLogCleanupError Then
         Call ErrorManager.addError( _
-            CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+            CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+            "cleanupStage", strCleanupStage)
     End If
 
     ' Cleanup helper: return the cleanup error rather than re-raising it.
