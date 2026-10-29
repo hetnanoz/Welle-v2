@@ -222,6 +222,7 @@ Private Function BuildEmailBodyHtml( _
     Dim errNumber As Long
     Dim lngTransactionCount As Long
     Dim lngUnknownCount As Long
+    Dim strImportantHtml As String
     Dim strOutputLocationsHtml As String
     Dim strResult As String
     Dim strTeamsToken As String
@@ -283,10 +284,20 @@ Private Function BuildEmailBodyHtml( _
 
     strOutputLocationsHtml = BuildOutputLocationsHtml( _
         appConfig, strLocalFolder, strSharePointUrl, strSharePointFolder)
+
+    strImportantHtml = HtmlEncode(COMBINED_IMPORTANT_MESSAGE)
+    strImportantHtml = Replace$(strImportantHtml, vbCrLf, "<br>")
+    strImportantHtml = Replace$(strImportantHtml, vbLf, "<br>")
+    strImportantHtml = Replace$( _
+        strImportantHtml, _
+        "[Fund Number]<br>Current mapping:", _
+        "[Fund Number]<br><br>Current mapping:", _
+        1, -1, vbTextCompare)
+
     strResult = Replace$( _
         strResult, HtmlEncode(OUTPUT_LOCATIONS_PLACEHOLDER), _
         strOutputLocationsHtml & "<br><br><b><span style='color:#C00000;'>" & _
-        HtmlEncode(COMBINED_IMPORTANT_MESSAGE) & "</span></b>")
+        strImportantHtml & "</span></b>")
 
 ExitPoint:
     If errNumber = 0 Then BuildEmailBodyHtml = strResult
@@ -580,13 +591,27 @@ Private Function BuildOutputLocationsHtml( _
     Const METHOD_NAME As String = "BuildOutputLocationsHtml"
     Dim errDescription As String
     Dim errNumber As Long
+    Dim strEncodedLocal As String
     Dim strEncodedSharePoint As String
+    Dim strLocalHref As String
     Dim strResult As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     If appConfig.SaveLocal Then
-        strResult = "Local folder: " & HtmlEncode(strLocalFolder)
+        strEncodedLocal = HtmlEncode(strLocalFolder)
+        strLocalHref = Replace$(strLocalFolder, "\", "/")
+
+        If Left$(strLocalHref, 2) = "//" Then
+            strLocalHref = "file:" & strLocalHref
+        Else
+            strLocalHref = "file:///" & strLocalHref
+        End If
+
+        strLocalHref = HtmlEncode(strLocalHref)
+        strResult = _
+            "Local folder: <a href='" & strLocalHref & "'>" & _
+            strEncodedLocal & "</a>"
     End If
 
     If appConfig.SaveSharePoint Then
