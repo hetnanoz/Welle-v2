@@ -68,6 +68,8 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
         appConfig.MailBody = ReadOptionalText(strConfigName)
         strConfigName = NAME_MAIL_BODY_NO_TEAMS
         appConfig.MailBodyNoTeams = ReadOptionalText(strConfigName)
+        strConfigName = NAME_MAIL_BODY_COMBINED_ONLY
+        appConfig.MailBodyCombinedOnly = ReadOptionalTextIfDefined(strConfigName)
         strConfigName = NAME_MAIL_TO
         appConfig.MailTo = ReadRequiredText(strConfigName)
         strConfigName = NAME_MAIL_CC
@@ -378,6 +380,47 @@ End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strName As String
+' Returns:       String
+' Description:   Reads a Mapping setting only when its name is defined.
+'                Missing new names remain optional for legacy workbooks.
+'-------------------------------------------------------------------------------
+Private Function ReadOptionalTextIfDefined(ByVal strName As String) As String
+    Const METHOD_NAME As String = "ReadOptionalTextIfDefined"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objName As Excel.Name
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each objName In ThisWorkbook.Names
+        If StrComp(GetUnqualifiedName(objName.Name), strName, vbTextCompare) = 0 Then
+            strResult = ReadOptionalText(strName)
+            Exit For
+        End If
+    Next objName
+
+ExitPoint:
+    Set objName = Nothing
+    If errNumber = 0 Then ReadOptionalTextIfDefined = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "name", strName)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
 ' Parameters:    strName As String
 ' Returns:       Boolean
@@ -596,5 +639,6 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Function
+
 
 
