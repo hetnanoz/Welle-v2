@@ -51,7 +51,12 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
     appConfig.InputWorksheetName = ReadRequiredText(strConfigName)
     strConfigName = NAME_FONDSLISTE_FOLDER
     appConfig.FondslisteFolder = ReadRequiredText(strConfigName)
-    strConfigName = NAME_FONDSLISTE_PATTERN
+    ' New typo-compatible Mapping name takes priority; legacy name still works.
+    strConfigName = NAME_FONDSLISTE_PARREN
+    If Not IsMappingNameDefined(strConfigName) Then
+        strConfigName = NAME_FONDSLISTE_PATTERN
+    End If
+    ' In FIXED mode this value is an exact base name, never a wildcard pattern.
     appConfig.FondslistePattern = ReadRequiredText(strConfigName)
     strConfigName = NAME_FONDSLISTE_EXTENSION
     appConfig.FondslisteExtension = ReadRequiredText(strConfigName)
@@ -114,6 +119,48 @@ ErrHandler:
         "configName", strConfigName)
     GoTo ExitPoint
 End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strName - configured Mapping name
+' Returns:       Boolean
+' Description:   Checks whether a named setting exists. If it exists but does
+'                not refer to a Mapping cell, ReadRequiredText raises an error.
+'-------------------------------------------------------------------------------
+Private Function IsMappingNameDefined(ByVal strName As String) As Boolean
+    Const METHOD_NAME As String = "IsMappingNameDefined"
+    Dim blnFound As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objName As Excel.Name
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each objName In ThisWorkbook.Names
+        If StrComp(GetUnqualifiedName(objName.Name), strName, vbTextCompare) = 0 Then
+            blnFound = True
+            Exit For
+        End If
+    Next objName
+
+ExitPoint:
+    Set objName = Nothing
+    If errNumber = 0 Then IsMappingNameDefined = blnFound
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "name", strName)
+    GoTo ExitPoint
+End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
