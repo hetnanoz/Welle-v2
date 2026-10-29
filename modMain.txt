@@ -111,7 +111,8 @@ Public Sub RunDallasCashTransactions()
         "loading latest Fondsliste")
     Application.StatusBar = "Dallas Cash Transactions: loading the latest Fondsliste..."
     strLatestFondslistePath = GetLatestFondslistePath(appConfig)
-    Set dictFundTeams = BuildOpenFundTeamDictionary(strLatestFondslistePath)
+    Set dictFundTeams = BuildOpenFundTeamDictionary( _
+        strLatestFondslistePath, appConfig.FondslisteLocalCopy, strStageWorkspace)
 
     Call BeginTimedStage( _
         strCurrentStage, strStageTimings, dtStageStarted, _
@@ -266,6 +267,157 @@ ErrHandler:
         strLatestFondslistePath)
     GoTo ExitPoint
 End Sub
+
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    ---
+' Returns:       ---
+' Description:   Diagnoses Fondsliste speed without processing Outlook or reports.
+'-------------------------------------------------------------------------------
+Public Sub BenchmarkFondslisteOnly()
+    Const METHOD_NAME As String = "BenchmarkFondslisteOnly"
+    Dim appConfig As TAppConfig
+    Dim blnPreviousAskToUpdateLinks As Boolean
+    Dim blnPreviousDisplayAlerts As Boolean
+    Dim blnPreviousEnableEvents As Boolean
+    Dim blnPreviousScreenUpdating As Boolean
+    Dim blnStateCaptured As Boolean
+    Dim cleanupErrNumber As Long
+    Dim dictFundTeams As Object
+    Dim dtBenchmarkStarted As Date
+    Dim enableEventsCleanupErrNumber As Long
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngOpenFundCount As Long
+    Dim lngPreviousAutomationSecurity As Long
+    Dim lngTotalSeconds As Long
+    Dim strCurrentStage As String
+    Dim strLatestFondslistePath As String
+    Dim strStageWorkspace As String
+    Dim varPreviousStatusBar As Variant
+    Dim xlPreviousCalculation As XlCalculation
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strCurrentStage = "capture Excel state"
+    blnPreviousScreenUpdating = Application.ScreenUpdating
+    blnPreviousEnableEvents = Application.EnableEvents
+    blnPreviousDisplayAlerts = Application.DisplayAlerts
+    blnPreviousAskToUpdateLinks = Application.AskToUpdateLinks
+    xlPreviousCalculation = Application.Calculation
+    varPreviousStatusBar = Application.StatusBar
+    lngPreviousAutomationSecurity = Application.AutomationSecurity
+    blnStateCaptured = True
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.DisplayAlerts = False
+    Application.AskToUpdateLinks = False
+    Application.Calculation = xlCalculationManual
+    Application.AutomationSecurity = AUTOMATION_SECURITY_FORCE_DISABLE
+    Application.StatusBar = "Dallas: testing Fondsliste only..."
+
+    dtBenchmarkStarted = Now
+    strCurrentStage = "read Mapping"
+    Call LoadConfiguration(appConfig)
+    strCurrentStage = "create temporary workspace"
+    strStageWorkspace = CreateRunWorkspace(Now)
+    strCurrentStage = "find latest Fondsliste"
+    strLatestFondslistePath = GetLatestFondslistePath(appConfig)
+    strCurrentStage = "open and read Fondsliste"
+    Set dictFundTeams = BuildOpenFundTeamDictionary( _
+        strLatestFondslistePath, appConfig.FondslisteLocalCopy, strStageWorkspace)
+
+    lngOpenFundCount = dictFundTeams.Count
+    lngTotalSeconds = DateDiff("s", dtBenchmarkStarted, Now)
+    Debug.Print "Dallas PERF | Fondsliste-only overall test | " & _
+        CStr(lngTotalSeconds) & " s"
+
+ExitPoint:
+    Set dictFundTeams = Nothing
+
+    If Len(strStageWorkspace) > 0 Then
+        cleanupErrNumber = DeleteDiagnosticWorkspaceSafely(strStageWorkspace)
+        If errNumber = 0 And cleanupErrNumber <> 0 Then
+            errNumber = cleanupErrNumber
+            errDescription = "Temporary Fondsliste test workspace could not be deleted."
+        End If
+    End If
+
+    If blnStateCaptured Then
+        enableEventsCleanupErrNumber = RestoreEnableEventsSafely( _
+            blnPreviousEnableEvents, errNumber = 0)
+        cleanupErrNumber = RestoreApplicationStateSafely( _
+            varPreviousStatusBar, lngPreviousAutomationSecurity, _
+            xlPreviousCalculation, blnPreviousAskToUpdateLinks, _
+            blnPreviousDisplayAlerts, blnPreviousScreenUpdating, errNumber = 0)
+
+        If errNumber = 0 And enableEventsCleanupErrNumber <> 0 Then
+            errNumber = enableEventsCleanupErrNumber
+            errDescription = "Could not restore Excel EnableEvents."
+        ElseIf errNumber = 0 And cleanupErrNumber <> 0 Then
+            errNumber = cleanupErrNumber
+            errDescription = "Could not restore Excel application state."
+        End If
+    End If
+
+    If errNumber <> 0 Then
+        Call ErrorManager.display
+    Else
+        Call MsgBox( _
+            "Fondsliste-only diagnostic completed." & vbCrLf & _
+            "Total time: " & CStr(lngTotalSeconds) & " s" & vbCrLf & _
+            "Open funds: " & CStr(lngOpenFundCount) & vbCrLf & _
+            "Local copy enabled: " & CStr(appConfig.FondslisteLocalCopy) & vbCrLf & _
+            "See Immediate window (Ctrl+G) for individual steps.", _
+            vbInformation, "Dallas Fondsliste test")
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "stage", strCurrentStage)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strWorkspace As String
+' Returns:       Long (0 = successful cleanup)
+' Description:   Cleans temporary diagnostics folder without masking errors.
+'-------------------------------------------------------------------------------
+Private Function DeleteDiagnosticWorkspaceSafely(ByVal strWorkspace As String) As Long
+    Const METHOD_NAME As String = "DeleteDiagnosticWorkspaceSafely"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objFileSystem As Object
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set objFileSystem = CreateObject("Scripting.FileSystemObject")
+    If objFileSystem.FolderExists(strWorkspace) Then
+        Call objFileSystem.DeleteFolder(strWorkspace, True)
+    End If
+
+ExitPoint:
+    Set objFileSystem = Nothing
+    DeleteDiagnosticWorkspaceSafely = errNumber
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "workspace", strWorkspace)
+    GoTo ExitPoint
+End Function
 
 
 '-------------------------------------------------------------------------------
@@ -634,6 +786,5 @@ ErrHandler:
     ' error to ErrorManager because that could hide the primary user-facing error.
     GoTo ExitPoint
 End Function
-
 
 
