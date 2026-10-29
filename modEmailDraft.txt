@@ -238,7 +238,8 @@ Private Function BuildEmailBodyHtml( _
 
     If Not appConfig.CreateTeamFiles Then
         strTeamsToken = "all teams"
-        strTemplate = GetCombinedOnlyMailBody()
+        strTemplate = appConfig.MailBodyCombinedOnly
+        If Len(strTemplate) = 0 Then strTemplate = GetCombinedOnlyMailBody()
     ElseIf Len(strTeamList) > 0 Then
         strTeamsToken = strTeamList
         strTemplate = appConfig.MailBody
@@ -712,3 +713,4 @@ ErrHandler:
     blnResult = False
     GoTo ExitPoint
 End Function
+
