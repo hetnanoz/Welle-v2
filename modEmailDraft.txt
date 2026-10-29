@@ -400,11 +400,19 @@ Private Function RenderMailTemplateHtml( _
 
     lngPosition = 1
     Do While lngPosition <= Len(strTemplate)
-        lngConsumed = 1
         strValue = vbNullString
         strFragment = vbNullString
 
-        Select Case True
+        ' A Mapping link is written as [[Link label|https://folder-url]].
+        lngConsumed = 0
+        If Mid$(strTemplate, lngPosition, 2) = "[[" Then
+            lngConsumed = TryRenderInlineMappingLink( _
+                strTemplate, lngPosition, strFragment)
+        End If
+
+        If lngConsumed = 0 Then
+            lngConsumed = 1
+            Select Case True
             Case StartsWithMailToken(strTemplate, lngPosition, LEGACY_SHAREPOINT_LINE, True)
                 lngConsumed = Len(LEGACY_SHAREPOINT_LINE)
                 strFragment = strOutputLocationsHtml
@@ -449,9 +457,10 @@ Private Function RenderMailTemplateHtml( _
                 ElseIf strValue = vbLf Then
                     strFragment = "<br>"
                 End If
-        End Select
+            End Select
+        End If
 
-        ' Dynamic text is encoded. Only location links from our own helper use raw HTML.
+        ' Dynamic text is encoded. Only validated links from our helpers use raw HTML.
         If Len(strFragment) = 0 Then strFragment = EncodeMailTextAsHtml(strValue)
 
         strNextCss = vbNullString
@@ -479,6 +488,75 @@ Private Function RenderMailTemplateHtml( _
 
 ExitPoint:
     If errNumber = 0 Then RenderMailTemplateHtml = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "characterPosition", lngPosition)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strTemplate, lngPosition, strLinkHtml (output)
+' Returns:       Number of consumed characters (zero when not a Mapping link).
+' Description:   Renders [[label|URL]] as a safe clickable link in Outlook.
+'-------------------------------------------------------------------------------
+Private Function TryRenderInlineMappingLink( _
+    ByVal strTemplate As String, _
+    ByVal lngPosition As Long, _
+    ByRef strLinkHtml As String) As Long
+    Const METHOD_NAME As String = "TryRenderInlineMappingLink"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngClose As Long
+    Dim lngConsumed As Long
+    Dim lngSeparator As Long
+    Dim strAddress As String
+    Dim strLabel As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If Mid$(strTemplate, lngPosition, 2) = "[[" Then
+        lngClose = InStr(lngPosition + 2, strTemplate, "]]", vbBinaryCompare)
+        If lngClose > 0 Then
+            lngSeparator = InStr(lngPosition + 2, strTemplate, "|", vbBinaryCompare)
+
+            If lngSeparator > lngPosition + 2 And lngSeparator < lngClose Then
+                strLabel = Trim$(Mid$( _
+                    strTemplate, lngPosition + 2, lngSeparator - lngPosition - 2))
+                strAddress = Trim$(Mid$( _
+                    strTemplate, lngSeparator + 1, lngClose - lngSeparator - 1))
+
+                If Len(strLabel) > 0 And Len(strAddress) > 0 Then
+                    If Left$(strAddress, 2) = "\\" Then
+                        strAddress = "file:" & Replace$(strAddress, "\", "/")
+                    ElseIf Not ( _
+                        LCase$(Left$(strAddress, 8)) = "https://" Or _
+                        LCase$(Left$(strAddress, 7)) = "http://" Or _
+                        LCase$(Left$(strAddress, 7)) = "file://") Then
+                        Call VBA.Err.Raise( _
+                            ERROR_EMAIL, METHOD_NAME, _
+                            "Invalid Mapping hyperlink. Use an HTTPS URL or UNC folder path.")
+                    End If
+
+                    strLinkHtml = "<a href=" & Chr$(34) & HtmlEncode(strAddress) & _
+                        Chr$(34) & ">" & HtmlEncode(strLabel) & "</a>"
+                    lngConsumed = lngClose + 2 - lngPosition
+                End If
+            End If
+        End If
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then TryRenderInlineMappingLink = lngConsumed
     If errNumber <> 0 Then
         Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
     End If
