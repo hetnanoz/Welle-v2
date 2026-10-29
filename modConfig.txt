@@ -55,6 +55,8 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
     appConfig.FondslistePattern = ReadRequiredText(strConfigName)
     strConfigName = NAME_FONDSLISTE_EXTENSION
     appConfig.FondslisteExtension = ReadRequiredText(strConfigName)
+    strConfigName = NAME_FLAG_FONDSLISTE_LOCAL_COPY
+    appConfig.FondslisteLocalCopy = ReadOptionalBooleanFlagIfDefined(strConfigName)
     strConfigName = NAME_SUPPORTED_TEAMS
     appConfig.SupportedTeams = ReadRequiredText(strConfigName)
 
@@ -419,6 +421,47 @@ ErrHandler:
     GoTo ExitPoint
 End Function
 
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strName As String
+' Returns:       Boolean
+' Description:   Reads a Boolean flag if defined; a missing name defaults to False.
+'-------------------------------------------------------------------------------
+Private Function ReadOptionalBooleanFlagIfDefined(ByVal strName As String) As Boolean
+    Const METHOD_NAME As String = "ReadOptionalBooleanFlagIfDefined"
+    Dim blnResult As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objName As Excel.Name
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each objName In ThisWorkbook.Names
+        If StrComp(GetUnqualifiedName(objName.Name), strName, vbTextCompare) = 0 Then
+            blnResult = ReadOptionalBooleanFlag(strName)
+            Exit For
+        End If
+    Next objName
+
+ExitPoint:
+    Set objName = Nothing
+    If errNumber = 0 Then ReadOptionalBooleanFlagIfDefined = blnResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "name", strName)
+    GoTo ExitPoint
+End Function
+
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-27
@@ -639,6 +682,5 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Function
-
 
 
