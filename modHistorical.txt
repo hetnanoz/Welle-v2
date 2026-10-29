@@ -215,11 +215,6 @@ Private Sub UpdateHistoricalWorkbook( _
             wksHistory, strHistoricalPath, lngHeaderRow, blnHeaderUpgraded)
     End If
 
-    wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
-    wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
-    wksHistory.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
-    wksHistory.Columns("W:W").NumberFormat = "@"
-
     lngExistingLastRow = wksHistory.Cells(wksHistory.Rows.Count, 6).End(xlUp).Row
     If lngExistingLastRow < lngHeaderRow Then
         lngExistingLastRow = lngHeaderRow
@@ -273,7 +268,31 @@ Private Sub UpdateHistoricalWorkbook( _
                 lngExistingLastRow + lngNewCount, OUTPUT_COLUMN_COUNT)).Value2 = arrNewRows
     End If
 
-    Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
+    If blnNewWorkbook Or blnHeaderUpgraded Or blnLayoutUpgraded Then
+        wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
+        wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
+        wksHistory.Columns("V:V").NumberFormat = OUTPUT_TIMESTAMP_NUMBER_FORMAT
+        wksHistory.Columns("W:W").NumberFormat = "@"
+    ElseIf lngNewCount > 0 Then
+        ' Preserve existing records/formatting and format appended rows only.
+        With wksHistory
+            .Range(.Cells(lngExistingLastRow + 1, 3), _
+                .Cells(lngExistingLastRow + lngNewCount, 4)).NumberFormat = "dd.mm.yyyy"
+            .Range(.Cells(lngExistingLastRow + 1, 8), _
+                .Cells(lngExistingLastRow + lngNewCount, 9)).NumberFormat = "dd.mm.yyyy"
+            .Range(.Cells(lngExistingLastRow + 1, 22), _
+                .Cells(lngExistingLastRow + lngNewCount, 22)).NumberFormat = _
+                OUTPUT_TIMESTAMP_NUMBER_FORMAT
+            .Range(.Cells(lngExistingLastRow + 1, 23), _
+                .Cells(lngExistingLastRow + lngNewCount, 23)).NumberFormat = "@"
+        End With
+    End If
+
+    If blnNewWorkbook Or lngNewCount > 0 Or _
+        blnHeaderUpgraded Or blnLayoutUpgraded Then
+
+        Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
+    End If
 
     If lngNewCount > 0 Then
         lngExistingLastRow = lngExistingLastRow + lngNewCount
@@ -609,9 +628,12 @@ Private Sub InitializeHistoricalHeader( _
     Next lngColumn
 
     Call ApplyHistoricalHeaderStyle(wksHistory, lngHeaderRow)
-    Call wksHistory.Range( _
-        wksHistory.Cells(lngHeaderRow, 1), _
-        wksHistory.Cells(lngHeaderRow, OUTPUT_COLUMN_COUNT)).AutoFilter
+    ' A Combined historical workbook gets its AutoFilter from tblTransactions.
+    If lngHeaderRow <> COMBINED_TABLE_HEADER_ROW Then
+        Call wksHistory.Range( _
+            wksHistory.Cells(lngHeaderRow, 1), _
+            wksHistory.Cells(lngHeaderRow, OUTPUT_COLUMN_COUNT)).AutoFilter
+    End If
     wksHistory.Columns("C:D").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("H:I").NumberFormat = "dd.mm.yyyy"
     wksHistory.Columns("R:S").NumberFormat = "#,##0.00"
@@ -1138,4 +1160,5 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "padding", dblPadding)
     GoTo ExitPoint
 End Sub
+
 
