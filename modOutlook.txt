@@ -21,6 +21,9 @@ Public Function DownloadCashTransactionAttachments( _
     Dim colAttachmentPaths As Collection
     Dim dblFilterSeconds As Double
     Dim dblLookupSeconds As Double
+    Dim dblSessionSeconds As Double
+    Dim dblFolderSeconds As Double
+    Dim dblFolderStarted As Double
     Dim dblSaveSeconds As Double
     Dim dblScanSeconds As Double
     Dim dblSenderSeconds As Double
@@ -73,10 +76,14 @@ Public Function DownloadCashTransactionAttachments( _
     dblStarted = CDbl(VBA.Timer)
     Set objOutlook = CreateObject("Outlook.Application")
     Set objNamespace = objOutlook.GetNamespace("MAPI")
-    Set objRootFolder = GetMailboxRootFolder(objNamespace, appConfig.OutlookMailbox)
-    Set objSourceFolder = GetFolderByPath(objRootFolder, appConfig.OutlookSourceFolder)
+    dblSessionSeconds = ElapsedOutlookSeconds(dblStarted)
+    dblFolderStarted = CDbl(VBA.Timer)
+    Set objSourceFolder = ResolveOutlookFolderWithIds( _
+        objNamespace, appConfig.OutlookMailbox, appConfig.OutlookSourceFolder, _
+        appConfig.OutlookSourceEntryId, appConfig.OutlookSourceStoreId, "source")
     strSourceStoreId = CStr(objSourceFolder.StoreID)
     strSourceFolderEntryId = CStr(objSourceFolder.EntryID)
+    dblFolderSeconds = ElapsedOutlookSeconds(dblFolderStarted)
     dblLookupSeconds = ElapsedOutlookSeconds(dblStarted)
 
     dblStarted = CDbl(VBA.Timer)
@@ -197,6 +204,10 @@ Public Function DownloadCashTransactionAttachments( _
     dblScanSeconds = ElapsedOutlookSeconds(dblStarted)
     Debug.Print "Dallas PERF | Outlook lookup mailbox/folder | " & _
         Format$(dblLookupSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook COM/session init | " & _
+        Format$(dblSessionSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook source folder resolve | " & _
+        Format$(dblFolderSeconds, "0.0") & " s"
     Debug.Print "Dallas PERF | Outlook Restrict and Count | " & _
         Format$(dblFilterSeconds, "0.0") & " s"
     Debug.Print "Dallas PERF | Outlook sender resolution | " & _
@@ -273,6 +284,9 @@ Public Function ArchiveProcessedOutlookMessages( _
     Dim arrMailInfo As Variant
     Dim blnSameStore As Boolean
     Dim dblLookupSeconds As Double
+    Dim dblSessionSeconds As Double
+    Dim dblFolderSeconds As Double
+    Dim dblFolderStarted As Double
     Dim dblMoveSeconds As Double
     Dim dblSetupSeconds As Double
     Dim dblStarted As Double
@@ -300,10 +314,13 @@ Public Function ArchiveProcessedOutlookMessages( _
                 dblStarted = CDbl(VBA.Timer)
                 Set objOutlook = CreateObject("Outlook.Application")
                 Set objNamespace = objOutlook.GetNamespace("MAPI")
-                Set objRootFolder = GetMailboxRootFolder( _
-                    objNamespace, appConfig.OutlookMailbox)
-                Set objArchiveFolder = GetFolderByPath( _
-                    objRootFolder, appConfig.OutlookArchiveFolder)
+                dblSessionSeconds = ElapsedOutlookSeconds(dblStarted)
+                dblFolderStarted = CDbl(VBA.Timer)
+                Set objArchiveFolder = ResolveOutlookFolderWithIds( _
+                    objNamespace, appConfig.OutlookMailbox, appConfig.OutlookArchiveFolder, _
+                    appConfig.OutlookArchiveEntryId, appConfig.OutlookArchiveStoreId, _
+                    "archive")
+                dblFolderSeconds = ElapsedOutlookSeconds(dblFolderStarted)
                 arrEntryIds = dictProcessedMailSubjects.Keys
 
                 arrMailInfo = dictProcessedMailSubjects( _
@@ -315,7 +332,7 @@ Public Function ArchiveProcessedOutlookMessages( _
                         strSourceStoreId, CStr(objArchiveFolder.StoreID), _
                         vbBinaryCompare) = 0)
 
-                If StrComp( _
+                If blnSameStore And StrComp( _
                     strSourceFolderEntryId, CStr(objArchiveFolder.EntryID), _
                     vbBinaryCompare) = 0 Then
                     Call VBA.Err.Raise( _
@@ -373,6 +390,10 @@ Public Function ArchiveProcessedOutlookMessages( _
                 dblTotalSeconds = ElapsedOutlookSeconds(dblStarted)
                 Debug.Print "Dallas PERF | Outlook archive folder lookup | " & _
                     Format$(dblSetupSeconds, "0.0") & " s"
+                Debug.Print "Dallas PERF | Outlook archive COM/session init | " & _
+                    Format$(dblSessionSeconds, "0.0") & " s"
+                Debug.Print "Dallas PERF | Outlook archive folder resolve | " & _
+                    Format$(dblFolderSeconds, "0.0") & " s"
                 Debug.Print "Dallas PERF | Outlook archive GetItemFromID | " & _
                     Format$(dblLookupSeconds, "0.0") & " s"
                 Debug.Print "Dallas PERF | Outlook archive MailItem.Move | " & _
@@ -411,6 +432,371 @@ ErrHandler:
         appConfig.OutlookArchiveFolder, lngItem)
     GoTo ExitPoint
 End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    MAPI namespace, mailbox, configured path, optional IDs, role.
+' Returns:       Object
+' Description:   Tries cached folder IDs, then falls back to original path traversal.
+'-------------------------------------------------------------------------------
+Private Function ResolveOutlookFolderWithIds( _
+    ByVal objNamespace As Object, _
+    ByVal strMailbox As String, _
+    ByVal strFolderPath As String, _
+    ByVal strFolderEntryId As String, _
+    ByVal strStoreId As String, _
+    ByVal strRole As String) As Object
+    Const METHOD_NAME As String = "ResolveOutlookFolderWithIds"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objFolder As Object
+    Dim objRootFolder As Object
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set objFolder = TryGetCachedOutlookFolder( _
+        objNamespace, strFolderEntryId, strStoreId, strFolderPath)
+
+    If objFolder Is Nothing Then
+        Debug.Print "Dallas PERF | Outlook " & strRole & " folder method | PATH fallback"
+        Set objRootFolder = GetMailboxRootFolder(objNamespace, strMailbox)
+        Set objFolder = GetFolderByPath(objRootFolder, strFolderPath)
+    Else
+        Debug.Print "Dallas PERF | Outlook " & strRole & " folder method | ID cache hit"
+    End If
+
+ExitPoint:
+    Set objRootFolder = Nothing
+    If errNumber = 0 Then Set ResolveOutlookFolderWithIds = objFolder
+    Set objFolder = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "folderRole;folderPath", strRole, strFolderPath)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    Namespace, optional ID pair and expected configured relative path.
+' Returns:       Object or Nothing
+' Description:   Treats missing/stale IDs as an optional cache miss, never as a hard error.
+'-------------------------------------------------------------------------------
+Private Function TryGetCachedOutlookFolder( _
+    ByVal objNamespace As Object, _
+    ByVal strFolderEntryId As String, _
+    ByVal strStoreId As String, _
+    ByVal strExpectedPath As String) As Object
+    Const METHOD_NAME As String = "TryGetCachedOutlookFolder"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objFolder As Object
+    Dim strActualPath As String
+    Dim strExpected As String
+    Dim strActual As String
+    Dim strActualRelative As String
+    Dim lngSeparator As Long
+
+    If Not DEV_MODE Then On Error GoTo CacheMiss
+
+    If Len(Trim$(strFolderEntryId)) > 0 And Len(Trim$(strStoreId)) > 0 Then
+        Set objFolder = objNamespace.GetFolderFromID(strFolderEntryId, strStoreId)
+
+        If Not objFolder Is Nothing Then
+            ' Verify the full relative path, not only the final folder name.
+            ' This protects against stale or incorrectly pasted Mapping IDs.
+            strActualPath = CStr(objFolder.FolderPath)
+            strActual = Replace$(Trim$(strActualPath), "/", "\")
+            strExpected = Replace$(Trim$(strExpectedPath), "/", "\")
+
+            Do While Len(strActual) > 0 And Left$(strActual, 1) = "\"
+                strActual = Mid$(strActual, 2)
+            Loop
+            Do While Len(strExpected) > 0 And Left$(strExpected, 1) = "\"
+                strExpected = Mid$(strExpected, 2)
+            Loop
+            Do While Len(strExpected) > 0 And Right$(strExpected, 1) = "\"
+                strExpected = Left$(strExpected, Len(strExpected) - 1)
+            Loop
+
+            ' Outlook FolderPath starts with the mailbox root name.
+            ' Compare the complete configured relative path, not just its suffix:
+            ' a cached Inbox\Cash must NOT satisfy a configured root\Cash.
+            lngSeparator = InStr(1, strActual, "\", vbBinaryCompare)
+            If lngSeparator > 0 Then
+                strActualRelative = Mid$(strActual, lngSeparator + 1)
+            End If
+
+            If Len(strExpected) = 0 Then
+                Set objFolder = Nothing
+            ElseIf StrComp(strActual, strExpected, vbTextCompare) <> 0 And _
+                StrComp(strActualRelative, strExpected, vbTextCompare) <> 0 Then
+                Debug.Print "Dallas PERF | Outlook ID cache path mismatch, using path lookup"
+                Set objFolder = Nothing
+            End If
+        End If
+    ElseIf Len(Trim$(strFolderEntryId)) > 0 Or Len(Trim$(strStoreId)) > 0 Then
+        Debug.Print "Dallas PERF | Outlook ID cache incomplete, using path lookup"
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then Set TryGetCachedOutlookFolder = objFolder
+    Set objFolder = Nothing
+    Exit Function
+
+CacheMiss:
+    ' A failed optional ID lookup is not a business failure. Do not pollute
+    ' BAT ErrorManager state; the existing path lookup is the safe fallback.
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Debug.Print "Dallas PERF | Outlook ID cache unavailable (" & _
+        CStr(errNumber) & "), using path lookup"
+    Set objFolder = Nothing
+    errNumber = 0
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    ---
+' Returns:       ---
+' Description:   Resolves both folders once and writes their IDs into named Mapping cells.
+'-------------------------------------------------------------------------------
+Public Sub CaptureOutlookFolderIdsToMapping()
+    Const METHOD_NAME As String = "CaptureOutlookFolderIdsToMapping"
+    Dim appConfig As TAppConfig
+    Dim arrIds(1 To 4) As String
+    Dim arrNames(1 To 4) As String
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngIndex As Long
+    Dim objArchiveFolder As Object
+    Dim objNamespace As Object
+    Dim objOutlook As Object
+    Dim objRootFolder As Object
+    Dim objSourceFolder As Object
+    Dim rngIds(1 To 4) As Excel.Range
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Call LoadConfiguration(appConfig)
+
+    If Len(Trim$(appConfig.OutlookArchiveFolder)) = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "OUTLOOK_ARCHIVE_FOLDER is required to capture both Outlook folders.")
+    End If
+
+    arrNames(1) = NAME_OUTLOOK_SOURCE_ENTRY_ID
+    arrNames(2) = NAME_OUTLOOK_SOURCE_STORE_ID
+    arrNames(3) = NAME_OUTLOOK_ARCHIVE_ENTRY_ID
+    arrNames(4) = NAME_OUTLOOK_ARCHIVE_STORE_ID
+
+    ' Validate all destinations BEFORE calling slow shared-mailbox resolution.
+    For lngIndex = 1 To 4
+        Set rngIds(lngIndex) = GetOutlookIdMappingCell(arrNames(lngIndex))
+    Next lngIndex
+
+    Set objOutlook = CreateObject("Outlook.Application")
+    Set objNamespace = objOutlook.GetNamespace("MAPI")
+    Set objRootFolder = GetMailboxRootFolder(objNamespace, appConfig.OutlookMailbox)
+    Set objSourceFolder = GetFolderByPath(objRootFolder, appConfig.OutlookSourceFolder)
+    Set objArchiveFolder = GetFolderByPath(objRootFolder, appConfig.OutlookArchiveFolder)
+
+    arrIds(1) = CStr(objSourceFolder.EntryID)
+    arrIds(2) = CStr(objSourceFolder.StoreID)
+    arrIds(3) = CStr(objArchiveFolder.EntryID)
+    arrIds(4) = CStr(objArchiveFolder.StoreID)
+
+    If Len(arrIds(1)) = 0 Or Len(arrIds(2)) = 0 Or _
+        Len(arrIds(3)) = 0 Or Len(arrIds(4)) = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_OUTLOOK, METHOD_NAME, _
+            "Outlook returned an empty folder ID or Store ID.")
+    End If
+
+    If StrComp(arrIds(2), arrIds(4), vbBinaryCompare) = 0 And _
+        StrComp(arrIds(1), arrIds(3), vbBinaryCompare) = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_OUTLOOK, METHOD_NAME, _
+            "Source and archive folders have identical IDs; capture cancelled.")
+    End If
+
+    For lngIndex = 1 To 4
+        rngIds(lngIndex).NumberFormat = "@"
+        rngIds(lngIndex).Value2 = arrIds(lngIndex)
+    Next lngIndex
+
+    Debug.Print "Dallas PERF | Outlook folder IDs saved to Mapping | 4 cells"
+    VBA.MsgBox _
+        "Outlook folder IDs saved to four Mapping cells." & vbCrLf & _
+        "Save the workbook and test the normal macro." & vbCrLf & _
+        "No messages were downloaded or moved.", vbInformation, "Welle Outlook IDs"
+
+ExitPoint:
+    For lngIndex = 1 To 4
+        Set rngIds(lngIndex) = Nothing
+    Next lngIndex
+    Set objArchiveFolder = Nothing
+    Set objSourceFolder = Nothing
+    Set objRootFolder = Nothing
+    Set objNamespace = Nothing
+    Set objOutlook = Nothing
+
+    If errNumber <> 0 Then Call ErrorManager.display
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strName As String
+' Returns:       Excel.Range
+' Description:   Retrieves a one-cell named range on Mapping for writing a folder ID.
+'-------------------------------------------------------------------------------
+Private Function GetOutlookIdMappingCell(ByVal strName As String) As Excel.Range
+    Const METHOD_NAME As String = "GetOutlookIdMappingCell"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngSeparator As Long
+    Dim objName As Excel.Name
+    Dim rngCandidate As Excel.Range
+    Dim rngResult As Excel.Range
+    Dim strSimpleName As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each objName In ThisWorkbook.Names
+        strSimpleName = CStr(objName.Name)
+        lngSeparator = InStrRev(strSimpleName, "!")
+        If lngSeparator > 0 Then
+            strSimpleName = Mid$(strSimpleName, lngSeparator + 1)
+        End If
+        strSimpleName = Replace$(strSimpleName, "'", vbNullString)
+
+        If StrComp(strSimpleName, strName, vbTextCompare) = 0 Then
+            Set rngCandidate = objName.RefersToRange
+            If rngCandidate.Cells.CountLarge = 1 Then
+                If StrComp( _
+                    CStr(rngCandidate.Parent.Name), SHEET_MAPPING, vbTextCompare) = 0 Then
+                    Set rngResult = rngCandidate
+                    Exit For
+                End If
+            End If
+            Set rngCandidate = Nothing
+        End If
+    Next objName
+
+    If rngResult Is Nothing Then
+        Call VBA.Err.Raise( _
+            ERROR_CONFIGURATION, METHOD_NAME, _
+            "Create this one-cell name on Mapping before capturing IDs: " & strName)
+    End If
+
+ExitPoint:
+    Set rngCandidate = Nothing
+    Set objName = Nothing
+    If errNumber = 0 Then Set GetOutlookIdMappingCell = rngResult
+    Set rngResult = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "name", strName)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    ---
+' Returns:       ---
+' Description:   Benchmarks source/archive folder access without processing messages.
+'-------------------------------------------------------------------------------
+Public Sub BenchmarkOutlookFoldersOnly()
+    Const METHOD_NAME As String = "BenchmarkOutlookFoldersOnly"
+    Dim appConfig As TAppConfig
+    Dim dblStarted As Double
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objArchiveFolder As Object
+    Dim objNamespace As Object
+    Dim objOutlook As Object
+    Dim objSourceFolder As Object
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Call LoadConfiguration(appConfig)
+    dblStarted = CDbl(VBA.Timer)
+    Set objOutlook = CreateObject("Outlook.Application")
+    Set objNamespace = objOutlook.GetNamespace("MAPI")
+    Debug.Print "Dallas PERF | Outlook benchmark COM/session | " & _
+        Format$(ElapsedOutlookSeconds(dblStarted), "0.0") & " s"
+
+    dblStarted = CDbl(VBA.Timer)
+    Set objSourceFolder = ResolveOutlookFolderWithIds( _
+        objNamespace, appConfig.OutlookMailbox, appConfig.OutlookSourceFolder, _
+        appConfig.OutlookSourceEntryId, appConfig.OutlookSourceStoreId, "source")
+    Debug.Print "Dallas PERF | Outlook benchmark source folder | " & _
+        Format$(ElapsedOutlookSeconds(dblStarted), "0.0") & " s"
+
+    If Len(Trim$(appConfig.OutlookArchiveFolder)) > 0 Then
+        dblStarted = CDbl(VBA.Timer)
+        Set objArchiveFolder = ResolveOutlookFolderWithIds( _
+            objNamespace, appConfig.OutlookMailbox, appConfig.OutlookArchiveFolder, _
+            appConfig.OutlookArchiveEntryId, appConfig.OutlookArchiveStoreId, _
+            "archive")
+        Debug.Print "Dallas PERF | Outlook benchmark archive folder | " & _
+            Format$(ElapsedOutlookSeconds(dblStarted), "0.0") & " s"
+
+        If StrComp( _
+            CStr(objSourceFolder.EntryID), CStr(objArchiveFolder.EntryID), _
+            vbBinaryCompare) = 0 And StrComp( _
+            CStr(objSourceFolder.StoreID), CStr(objArchiveFolder.StoreID), _
+            vbBinaryCompare) = 0 Then
+            Call VBA.Err.Raise( _
+                ERROR_OUTLOOK, METHOD_NAME, _
+                "Source and archive folders refer to the same Outlook folder.")
+        End If
+    End If
+
+ExitPoint:
+    Set objArchiveFolder = Nothing
+    Set objSourceFolder = Nothing
+    Set objNamespace = Nothing
+    Set objOutlook = Nothing
+    If errNumber <> 0 Then Call ErrorManager.display
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
