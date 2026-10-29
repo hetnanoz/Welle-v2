@@ -41,6 +41,16 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
         appConfig.OutlookArchiveFolder = ReadOptionalText(strConfigName)
     End If
 
+    ' Optional ID pairs skip expensive mailbox/folder traversal when valid.
+    strConfigName = NAME_OUTLOOK_SOURCE_ENTRY_ID
+    appConfig.OutlookSourceEntryId = ReadOptionalTextIfDefined(strConfigName)
+    strConfigName = NAME_OUTLOOK_SOURCE_STORE_ID
+    appConfig.OutlookSourceStoreId = ReadOptionalTextIfDefined(strConfigName)
+    strConfigName = NAME_OUTLOOK_ARCHIVE_ENTRY_ID
+    appConfig.OutlookArchiveEntryId = ReadOptionalTextIfDefined(strConfigName)
+    strConfigName = NAME_OUTLOOK_ARCHIVE_STORE_ID
+    appConfig.OutlookArchiveStoreId = ReadOptionalTextIfDefined(strConfigName)
+
     strConfigName = NAME_OUTLOOK_SUBJECT_PREFIX
     appConfig.OutlookSubjectPrefix = ReadRequiredText(strConfigName)
     strConfigName = NAME_OUTLOOK_SENDER_EMAIL
@@ -85,6 +95,8 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
         appConfig.MailFrom = ReadOptionalText(strConfigName)
         strConfigName = NAME_MAIL_SHAREPOINT_URL
         appConfig.MailSharePointUrl = ReadOptionalText(strConfigName)
+        strConfigName = NAME_MASTER_HISTORICAL_FOLDER_PATH
+        appConfig.MasterHistoricalFolderPath = ReadOptionalTextIfDefined(strConfigName)
     End If
 
     If appConfig.SaveLocal Then
