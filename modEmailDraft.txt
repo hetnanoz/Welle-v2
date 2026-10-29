@@ -283,7 +283,10 @@ Private Function BuildEmailBodyHtml( _
 
     strOutputLocationsHtml = BuildOutputLocationsHtml( _
         appConfig, strLocalFolder, strSharePointUrl, strSharePointFolder)
-    strResult = Replace$(strResult, HtmlEncode(OUTPUT_LOCATIONS_PLACEHOLDER), strOutputLocationsHtml)
+    strResult = Replace$( _
+        strResult, HtmlEncode(OUTPUT_LOCATIONS_PLACEHOLDER), _
+        strOutputLocationsHtml & "<br><br><b><span style='color:#C00000;'>" & _
+        HtmlEncode(COMBINED_IMPORTANT_MESSAGE) & "</span></b>")
 
 ExitPoint:
     If errNumber = 0 Then BuildEmailBodyHtml = strResult
