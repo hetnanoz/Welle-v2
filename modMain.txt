@@ -1,6 +1,7 @@
 Option Explicit
 
 Private Const CLASS_NAME As String = "modMain"
+Private Const SHOW_STAGE_TIMINGS As Boolean = True
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
@@ -43,6 +44,8 @@ Public Sub RunDallasCashTransactions()
     Dim varPreviousStatusBar As Variant
     Dim xlPreviousCalculation As XlCalculation
     Dim dtRunTimestamp As Date
+    Dim dtStageStarted As Date
+    Dim strStageTimings As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
@@ -72,39 +75,55 @@ Public Sub RunDallasCashTransactions()
     Application.AutomationSecurity = AUTOMATION_SECURITY_FORCE_DISABLE
     Application.StatusBar = "Dallas Cash Transactions: reading configuration..."
 
-    strCurrentStage = "reading configuration"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "reading configuration")
     dtRunTimestamp = Now
     Call LoadConfiguration(appConfig)
-    strCurrentStage = "creating run workspace"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "creating run workspace")
     strStageWorkspace = CreateRunWorkspace(dtRunTimestamp)
     strInputFolder = CreateInputWorkingFolder(appConfig, dtRunTimestamp, strStageWorkspace)
 
-    strCurrentStage = "downloading Outlook attachments"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "downloading Outlook attachments")
     Application.StatusBar = _
         "Dallas Cash Transactions: downloading Outlook attachments to daily Input folder..."
     Set colAttachmentPaths = DownloadCashTransactionAttachments( _
         appConfig, strInputFolder, dictAttachmentSubjects, dictProcessedMailSubjects)
 
-    strCurrentStage = "merging input files"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "merging input files")
     Application.StatusBar = "Dallas Cash Transactions: merging input files from disk..."
     arrCombined = MergeInputFiles(colAttachmentPaths, appConfig.InputWorksheetName, dictAttachmentSubjects)
 
-    strCurrentStage = "deduplicating current transactions"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "deduplicating current transactions")
     Application.StatusBar = "Dallas Cash Transactions: removing duplicate transactions..."
     arrCombined = DeduplicateCurrentTransactions(arrCombined)
 
-    strCurrentStage = "loading latest Fondsliste"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "loading latest Fondsliste")
     Application.StatusBar = "Dallas Cash Transactions: loading the latest Fondsliste..."
     strLatestFondslistePath = GetLatestFondslistePath(appConfig)
     Set dictFundTeams = BuildOpenFundTeamDictionary(strLatestFondslistePath)
 
-    strCurrentStage = "updating Static_Data and enriching transactions"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "updating Static_Data and enriching transactions")
     Application.StatusBar = "Dallas Cash Transactions: updating Static_Data..."
     Call UpdateStaticDataFromFondsliste(dictFundTeams)
     Set dictAccounts = BuildAccountMappingDictionary()
     Call EnrichTransactions(arrCombined, dictAccounts)
 
-    strCurrentStage = "building output destinations"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "building output destinations")
     Set colTeams = ParseSupportedTeams(appConfig.SupportedTeams)
     Set colDestinationRoots = BuildDestinationRoots(appConfig)
 
@@ -119,7 +138,9 @@ Public Sub RunDallasCashTransactions()
     End If
 
     If appConfig.ArchiveInputFiles Then
-        strCurrentStage = "archiving source input files"
+        Call BeginTimedStage( _
+            strCurrentStage, strStageTimings, dtStageStarted, _
+            "archiving source input files")
         Application.StatusBar = _
             "Dallas Cash Transactions: archiving source input files..."
         Call PublishInputFilesToDailyFolders( _
@@ -127,14 +148,18 @@ Public Sub RunDallasCashTransactions()
             DateValue(dtRunTimestamp), strInputFolder)
     End If
 
-    strCurrentStage = "creating daily reports"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "creating daily reports")
     Application.StatusBar = "Dallas Cash Transactions: creating daily reports..."
     Call CreateDailyReports( _
         arrCombined, colTeams, colDestinationRoots, dtRunTimestamp, _
         strStageWorkspace, appConfig.CreateTeamFiles)
 
     If appConfig.UpdateHistorical Then
-        strCurrentStage = "updating historical master files"
+        Call BeginTimedStage( _
+            strCurrentStage, strStageTimings, dtStageStarted, _
+            "updating historical master files")
         Application.StatusBar = "Dallas Cash Transactions: updating historical master files..."
         Call UpdateHistoricalFiles( _
             arrCombined, colTeams, colDestinationRoots, _
@@ -142,7 +167,9 @@ Public Sub RunDallasCashTransactions()
     End If
 
     If appConfig.CreateEmailDraft Then
-        strCurrentStage = "creating Outlook email draft"
+        Call BeginTimedStage( _
+            strCurrentStage, strStageTimings, dtStageStarted, _
+            "creating Outlook email draft")
         Application.StatusBar = "Dallas Cash Transactions: creating Outlook email draft..."
         Call CreateCashTransactionsEmailDraft( _
             appConfig, arrCombined, colTeams, dtRunTimestamp, blnEmailLabelApplied)
@@ -150,26 +177,38 @@ Public Sub RunDallasCashTransactions()
     End If
 
     If appConfig.ArchiveOutlookMessages Then
-        strCurrentStage = "archiving processed Outlook messages"
+        Call BeginTimedStage( _
+            strCurrentStage, strStageTimings, dtStageStarted, _
+            "archiving processed Outlook messages")
         Application.StatusBar = _
             "Dallas Cash Transactions: archiving processed Outlook messages..."
         lngArchivedMailCount = ArchiveProcessedOutlookMessages( _
             appConfig, dictProcessedMailSubjects)
     End If
 
-    strCurrentStage = "cleaning temporary workspace"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "cleaning temporary workspace")
     If Len(strStageWorkspace) > 0 Then
         Call DeleteFolderIfExists(strStageWorkspace)
         strStageWorkspace = vbNullString
     End If
 
-    strCurrentStage = "building success summary"
+    Call BeginTimedStage( _
+        strCurrentStage, strStageTimings, dtStageStarted, _
+        "building success summary")
     strSuccessMessage = BuildSuccessMessage( _
         arrCombined, colTeams, colAttachmentPaths.Count, _
         lngArchivedMailCount, appConfig.ArchiveInputFiles, _
         appConfig.ArchiveOutlookMessages, appConfig.CreateEmailDraft, _
         blnEmailDraftCreated, blnEmailLabelApplied, _
         strResolvedLocalOutputFolder, strResolvedSharePointOutputFolder)
+
+    Call CompleteTimedStage(strCurrentStage, strStageTimings, dtStageStarted)
+    If SHOW_STAGE_TIMINGS Then
+        strSuccessMessage = strSuccessMessage & vbCrLf & vbCrLf & _
+            "Stage timings (seconds):" & strStageTimings
+    End If
 
 ExitPoint:
     Set dictAccounts = Nothing
@@ -225,6 +264,114 @@ ErrHandler:
         "stage;inputFolder;stageWorkspace;fondslistePath", _
         strCurrentStage, strInputFolder, strStageWorkspace, _
         strLatestFondslistePath)
+    GoTo ExitPoint
+End Sub
+
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    Current stage, log, stage start and next stage.
+' Returns:       ---
+' Description:   Records completed stage duration without creating disk log files.
+'-------------------------------------------------------------------------------
+Private Sub BeginTimedStage( _
+    ByRef strCurrentStage As String, _
+    ByRef strStageTimings As String, _
+    ByRef dtStageStarted As Date, _
+    ByVal strNewStage As String)
+
+    Const METHOD_NAME As String = "BeginTimedStage"
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Call CompleteTimedStage(strCurrentStage, strStageTimings, dtStageStarted)
+    strCurrentStage = strNewStage
+    dtStageStarted = Now
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "stage", strNewStage)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    Current stage, log and stage start.
+' Returns:       ---
+' Description:   Appends elapsed seconds; does not log business or personal data.
+'-------------------------------------------------------------------------------
+Private Sub CompleteTimedStage( _
+    ByVal strCurrentStage As String, _
+    ByRef strStageTimings As String, _
+    ByVal dtStageStarted As Date)
+
+    Const METHOD_NAME As String = "CompleteTimedStage"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngElapsedSeconds As Long
+    Dim strShortStage As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If dtStageStarted <> 0 And SHOW_STAGE_TIMINGS Then
+        lngElapsedSeconds = DateDiff("s", dtStageStarted, Now)
+        Debug.Print "Dallas PERF | " & strCurrentStage & " | " & _
+            CStr(lngElapsedSeconds) & " s"
+
+        Select Case strCurrentStage
+            Case "downloading Outlook attachments"
+                strShortStage = "Outlook"
+            Case "merging input files"
+                strShortStage = "Merge"
+            Case "loading latest Fondsliste"
+                strShortStage = "Fondsliste"
+            Case "updating Static_Data and enriching transactions"
+                strShortStage = "Static_Data"
+            Case "building output destinations"
+                strShortStage = "Output paths"
+            Case "archiving source input files"
+                strShortStage = "Input archive"
+            Case "creating daily reports"
+                strShortStage = "Daily reports"
+            Case "updating historical master files"
+                strShortStage = "Historical"
+            Case "creating Outlook email draft"
+                strShortStage = "Mail draft"
+            Case "archiving processed Outlook messages"
+                strShortStage = "Mail archive"
+        End Select
+
+        If Len(strShortStage) > 0 Then
+            strStageTimings = strStageTimings & vbCrLf & _
+                strShortStage & ": " & CStr(lngElapsedSeconds)
+        End If
+    End If
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "stage", strCurrentStage)
     GoTo ExitPoint
 End Sub
 
@@ -487,5 +634,6 @@ ErrHandler:
     ' error to ErrorManager because that could hide the primary user-facing error.
     GoTo ExitPoint
 End Function
+
 
 
