@@ -13,58 +13,101 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
     Const METHOD_NAME As String = "LoadConfiguration"
     Dim errDescription As String
     Dim errNumber As Long
+    Dim strConfigName As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    appConfig.SaveLocal = ReadBooleanFlag(NAME_FLAG_SAVE_LOCAL)
-    appConfig.SaveSharePoint = ReadBooleanFlag(NAME_FLAG_SAVE_SHAREPOINT)
-    appConfig.UpdateHistorical = ReadBooleanFlag(NAME_FLAG_UPDATE_HISTORICAL)
-    appConfig.CreateTeamFiles = ReadBooleanFlag(NAME_FLAG_CREATE_TEAM_FILES)
-    appConfig.ArchiveInputFiles = ReadBooleanFlag(NAME_FLAG_ARCHIVE_INPUT_FILES)
-    appConfig.ArchiveOutlookMessages = ReadBooleanFlag(NAME_FLAG_ARCHIVE_OUTLOOK_MESSAGES)
-    appConfig.OutlookMailbox = ReadRequiredText(NAME_OUTLOOK_MAILBOX)
-    appConfig.OutlookSourceFolder = ReadRequiredText(NAME_OUTLOOK_SOURCE_FOLDER)
-    If appConfig.ArchiveOutlookMessages Then
-        appConfig.OutlookArchiveFolder = ReadRequiredText(NAME_OUTLOOK_ARCHIVE_FOLDER)
-    Else
-        appConfig.OutlookArchiveFolder = ReadOptionalText(NAME_OUTLOOK_ARCHIVE_FOLDER)
-    End If
-    appConfig.OutlookSubjectPrefix = ReadRequiredText(NAME_OUTLOOK_SUBJECT_PREFIX)
-    appConfig.OutlookSenderEmail = ReadOptionalText(NAME_OUTLOOK_SENDER_EMAIL)
-    appConfig.OutlookAttachmentPrefix = ReadRequiredText(NAME_OUTLOOK_ATTACHMENT_PREFIX)
-    appConfig.InputWorksheetName = ReadRequiredText(NAME_INPUT_WORKSHEET_NAME)
-    appConfig.FondslisteFolder = ReadRequiredText(NAME_FONDSLISTE_FOLDER)
-    appConfig.FondslistePattern = ReadRequiredText(NAME_FONDSLISTE_PATTERN)
-    appConfig.FondslisteExtension = ReadRequiredText(NAME_FONDSLISTE_EXTENSION)
-    appConfig.SupportedTeams = ReadRequiredText(NAME_SUPPORTED_TEAMS)
+    strConfigName = NAME_FLAG_SAVE_LOCAL
+    appConfig.SaveLocal = ReadBooleanFlag(strConfigName)
+    strConfigName = NAME_FLAG_SAVE_SHAREPOINT
+    appConfig.SaveSharePoint = ReadBooleanFlag(strConfigName)
+    strConfigName = NAME_FLAG_UPDATE_HISTORICAL
+    appConfig.UpdateHistorical = ReadBooleanFlag(strConfigName)
+    strConfigName = NAME_FLAG_CREATE_TEAM_FILES
+    appConfig.CreateTeamFiles = ReadBooleanFlag(strConfigName)
+    strConfigName = NAME_FLAG_ARCHIVE_INPUT_FILES
+    appConfig.ArchiveInputFiles = ReadBooleanFlag(strConfigName)
+    strConfigName = NAME_FLAG_ARCHIVE_OUTLOOK_MESSAGES
+    appConfig.ArchiveOutlookMessages = ReadBooleanFlag(strConfigName)
 
-    appConfig.CreateEmailDraft = ReadOptionalBooleanFlag(NAME_CREATE_EMAIL_DRAFT)
+    strConfigName = NAME_OUTLOOK_MAILBOX
+    appConfig.OutlookMailbox = ReadRequiredText(strConfigName)
+    strConfigName = NAME_OUTLOOK_SOURCE_FOLDER
+    appConfig.OutlookSourceFolder = ReadRequiredText(strConfigName)
+    strConfigName = NAME_OUTLOOK_ARCHIVE_FOLDER
+    If appConfig.ArchiveOutlookMessages Then
+        appConfig.OutlookArchiveFolder = ReadRequiredText(strConfigName)
+    Else
+        appConfig.OutlookArchiveFolder = ReadOptionalText(strConfigName)
+    End If
+
+    strConfigName = NAME_OUTLOOK_SUBJECT_PREFIX
+    appConfig.OutlookSubjectPrefix = ReadRequiredText(strConfigName)
+    strConfigName = NAME_OUTLOOK_SENDER_EMAIL
+    appConfig.OutlookSenderEmail = ReadOptionalText(strConfigName)
+    strConfigName = NAME_OUTLOOK_ATTACHMENT_PREFIX
+    appConfig.OutlookAttachmentPrefix = ReadRequiredText(strConfigName)
+    strConfigName = NAME_INPUT_WORKSHEET_NAME
+    appConfig.InputWorksheetName = ReadRequiredText(strConfigName)
+    strConfigName = NAME_FONDSLISTE_FOLDER
+    appConfig.FondslisteFolder = ReadRequiredText(strConfigName)
+    strConfigName = NAME_FONDSLISTE_PATTERN
+    appConfig.FondslistePattern = ReadRequiredText(strConfigName)
+    strConfigName = NAME_FONDSLISTE_EXTENSION
+    appConfig.FondslisteExtension = ReadRequiredText(strConfigName)
+    strConfigName = NAME_SUPPORTED_TEAMS
+    appConfig.SupportedTeams = ReadRequiredText(strConfigName)
+
+    strConfigName = NAME_CREATE_EMAIL_DRAFT
+    appConfig.CreateEmailDraft = ReadOptionalBooleanFlag(strConfigName)
 
     If appConfig.CreateEmailDraft Then
-        appConfig.MailSubject = ReadRequiredText(NAME_MAIL_SUBJECT)
-        appConfig.MailBody = ReadOptionalText(NAME_MAIL_BODY)
-        appConfig.MailBodyNoTeams = ReadOptionalText(NAME_MAIL_BODY_NO_TEAMS)
-        appConfig.MailTo = ReadRequiredText(NAME_MAIL_TO)
-        appConfig.MailCc = ReadOptionalText(NAME_MAIL_CC)
-        appConfig.MailFrom = ReadOptionalText(NAME_MAIL_FROM)
-        appConfig.MailSharePointUrl = ReadOptionalText(NAME_MAIL_SHAREPOINT_URL)
+        strConfigName = NAME_MAIL_SUBJECT
+        appConfig.MailSubject = ReadRequiredText(strConfigName)
+        strConfigName = NAME_MAIL_BODY
+        appConfig.MailBody = ReadOptionalText(strConfigName)
+        strConfigName = NAME_MAIL_BODY_NO_TEAMS
+        appConfig.MailBodyNoTeams = ReadOptionalText(strConfigName)
+        strConfigName = NAME_MAIL_TO
+        appConfig.MailTo = ReadRequiredText(strConfigName)
+        strConfigName = NAME_MAIL_CC
+        appConfig.MailCc = ReadOptionalText(strConfigName)
+        strConfigName = NAME_MAIL_FROM
+        appConfig.MailFrom = ReadOptionalText(strConfigName)
+        strConfigName = NAME_MAIL_SHAREPOINT_URL
+        appConfig.MailSharePointUrl = ReadOptionalText(strConfigName)
     End If
 
-    If appConfig.SaveLocal Then appConfig.OutputLocalBase = ReadRequiredText(NAME_OUTPUT_LOCAL_BASE)
+    If appConfig.SaveLocal Then
+        strConfigName = NAME_OUTPUT_LOCAL_BASE
+        appConfig.OutputLocalBase = ReadRequiredText(strConfigName)
+    End If
+
     If appConfig.SaveSharePoint Then
-        appConfig.OutputSharePointBase = ReadRequiredText(NAME_OUTPUT_SHAREPOINT_BASE)
+        strConfigName = NAME_OUTPUT_SHAREPOINT_BASE
+        appConfig.OutputSharePointBase = ReadRequiredText(strConfigName)
     End If
 
+    strConfigName = "cross-field validation"
     Call ValidateConfiguration(appConfig)
 
 ExitPoint:
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Sub
 
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    If Len(strConfigName) > 0 Then
+        errDescription = _
+            "Configuration item: " & strConfigName & ". " & errDescription
+    End If
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "configName", strConfigName)
     GoTo ExitPoint
 End Sub
 
@@ -82,6 +125,7 @@ Private Function GetNamedCellRange(ByVal strName As String) As Excel.Range
     Dim objName As Excel.Name
     Dim rngCandidate As Excel.Range
     Dim rngResult As Excel.Range
+    Dim strRefersTo As String
     Dim strSimpleName As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
@@ -90,9 +134,27 @@ Private Function GetNamedCellRange(ByVal strName As String) As Excel.Range
         strSimpleName = GetUnqualifiedName(objName.Name)
 
         If StrComp(strSimpleName, strName, vbTextCompare) = 0 Then
+            strRefersTo = CStr(objName.RefersTo)
+
+            If InStr(1, strRefersTo, "#REF!", vbTextCompare) > 0 Then
+                Call VBA.Err.Raise( _
+                    ERROR_CONFIGURATION, METHOD_NAME, _
+                    "Named configuration cell is broken (#REF!): " & strName & _
+                    ". Reassign it in Formulas > Name Manager.")
+            End If
+
+            If InStr(1, strRefersTo, "!", vbBinaryCompare) = 0 Then
+                Call VBA.Err.Raise( _
+                    ERROR_CONFIGURATION, METHOD_NAME, _
+                    "Named configuration item does not refer to a worksheet cell: " & _
+                    strName)
+            End If
+
             Set rngCandidate = objName.RefersToRange
 
-            If StrComp(CStr(rngCandidate.Parent.Name), SHEET_MAPPING, vbTextCompare) = 0 Then
+            If StrComp( _
+                CStr(rngCandidate.Parent.Name), SHEET_MAPPING, vbTextCompare) = 0 Then
+
                 Set rngResult = rngCandidate
                 Exit For
             End If
@@ -104,6 +166,7 @@ Private Function GetNamedCellRange(ByVal strName As String) As Excel.Range
             ERROR_CONFIGURATION, METHOD_NAME, _
             "Named cell was not found on Mapping: " & strName)
     End If
+
     If rngResult.Cells.CountLarge <> 1 Then
         Call VBA.Err.Raise( _
             ERROR_CONFIGURATION, METHOD_NAME, _
@@ -115,13 +178,28 @@ ExitPoint:
     Set objName = Nothing
     If errNumber = 0 Then Set GetNamedCellRange = rngResult
     Set rngResult = Nothing
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "name", strName)
+
+    If errNumber = 1004 Then
+        errDescription = _
+            "Named configuration item exists but does not resolve to a valid " & _
+            "cell on Mapping: " & strName & ". Check Formulas > Name Manager " & _
+            "for #REF!, wrong scope or a non-cell reference. Original error: " & _
+            errDescription
+    End If
+
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "name", strName)
     GoTo ExitPoint
 End Function
 
@@ -518,4 +596,5 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Function
+
 
