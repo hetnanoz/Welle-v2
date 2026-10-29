@@ -16,7 +16,6 @@ Public Sub EnsureCombinedDashboard( _
     Optional ByVal blnForceRebuild As Boolean = False)
 
     Const METHOD_NAME As String = "EnsureCombinedDashboard"
-    Dim blnRebuildSlicers As Boolean
     Dim errDescription As String
     Dim errNumber As Long
     Dim lstTransactions As Excel.ListObject
@@ -38,47 +37,53 @@ Public Sub EnsureCombinedDashboard( _
         lngLastRow = COMBINED_TABLE_HEADER_ROW
     End If
 
+    strStage = "delete existing slicers"
+    Call DeleteOwnedSlicerCaches(wkbTarget)
+
     strStage = "delete legacy dashboard"
     Call DeleteLegacyDashboardSheet(wkbTarget)
+
+    strStage = "reset slicer area"
+    Call ResetCombinedFilterArea(wksTransactions)
 
     strStage = "create or resize transaction table"
     Set lstTransactions = EnsureTransactionsTable(wksTransactions, lngLastRow)
 
-    strStage = "find existing slicers"
-    Set slTeam = FindOwnedSlicer(wkbTarget, SLICER_TEAM_NAME)
-    Set slFund = FindOwnedSlicer(wkbTarget, SLICER_FUND_NAME)
-    blnRebuildSlicers = blnForceRebuild Or slTeam Is Nothing Or slFund Is Nothing
+    strStage = "create Team slicer cache"
+    Set scTeam = wkbTarget.SlicerCaches.Add2(lstTransactions, "Team")
 
-    If blnRebuildSlicers Then
-        Set slTeam = Nothing
-        Set slFund = Nothing
+    strStage = "create Team slicer"
+    Set slTeam = scTeam.Slicers.Add( _
+        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 210, 125)
 
-        strStage = "delete existing slicers"
-        Call DeleteOwnedSlicerCaches(wkbTarget)
+    strStage = "create Fund slicer cache"
+    Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
 
-        strStage = "reset slicer area"
-        Call ResetCombinedFilterArea(wksTransactions)
+    strStage = "create Fund slicer"
+    Set slFund = scFund.Slicers.Add( _
+        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 230, 330, 125)
 
-        strStage = "create Team slicer cache"
-        Set scTeam = wkbTarget.SlicerCaches.Add2(lstTransactions, "Team")
+    With slTeam
+        .DisplayHeader = True
+        .NumberOfColumns = 2
+        .ColumnWidth = 90
+        .RowHeight = 22
+        .Width = 210
+        .Height = 125
+        .DisableMoveResizeUI = True
+        .Locked = True
+    End With
 
-        strStage = "create Team slicer"
-        Set slTeam = scTeam.Slicers.Add( _
-            wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 210, 125)
-
-        strStage = "create Fund slicer cache"
-        Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
-
-        strStage = "create Fund slicer"
-        Set slFund = scFund.Slicers.Add( _
-            wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 230, 330, 125)
-    End If
-
-    strStage = "apply Team slicer layout"
-    Call ApplyTeamSlicerLayout(slTeam)
-
-    strStage = "apply Fund slicer layout"
-    Call ApplyFundSlicerLayout(slFund)
+    With slFund
+        .DisplayHeader = True
+        .NumberOfColumns = 3
+        .ColumnWidth = 95
+        .RowHeight = 22
+        .Width = 330
+        .Height = 125
+        .DisableMoveResizeUI = True
+        .Locked = True
+    End With
 
     strStage = "create or update IMPORTANT message"
     Call EnsureImportantMessage(wksTransactions)
@@ -106,151 +111,6 @@ ErrHandler:
     GoTo ExitPoint
 End Sub
 
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-29
-' Parameters:    Workbook and owned slicer name.
-' Returns:       Excel.Slicer
-' Description:   Finds an existing Dallas slicer without rebuilding its cache.
-'-------------------------------------------------------------------------------
-Private Function FindOwnedSlicer( _
-    ByVal wkbTarget As Excel.Workbook, _
-    ByVal strSlicerName As String) As Excel.Slicer
-
-    Const METHOD_NAME As String = "FindOwnedSlicer"
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim scCandidate As Excel.SlicerCache
-    Dim slCandidate As Excel.Slicer
-    Dim slResult As Excel.Slicer
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    For Each scCandidate In wkbTarget.SlicerCaches
-        For Each slCandidate In scCandidate.Slicers
-            If StrComp(slCandidate.Name, strSlicerName, vbTextCompare) = 0 Then
-                Set slResult = slCandidate
-                Exit For
-            End If
-        Next slCandidate
-
-        If Not slResult Is Nothing Then Exit For
-    Next scCandidate
-
-ExitPoint:
-    Set slCandidate = Nothing
-    Set scCandidate = Nothing
-    If errNumber = 0 Then Set FindOwnedSlicer = slResult
-    Set slResult = Nothing
-
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise( _
-            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Function
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "slicerName", strSlicerName)
-    GoTo ExitPoint
-End Function
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-29
-' Parameters:    Team slicer.
-' Returns:       ---
-' Description:   Applies the fixed Team slicer layout without rebuilding it.
-'-------------------------------------------------------------------------------
-Private Sub ApplyTeamSlicerLayout(ByVal slTeam As Excel.Slicer)
-    Const METHOD_NAME As String = "ApplyTeamSlicerLayout"
-    Dim errDescription As String
-    Dim errNumber As Long
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    If slTeam Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_OUTPUT, METHOD_NAME, "Team slicer is not available.")
-    End If
-
-    With slTeam
-        .DisplayHeader = True
-        .NumberOfColumns = 2
-        .ColumnWidth = 90
-        .RowHeight = 22
-        .Left = 8
-        .Top = 8
-        .Width = 210
-        .Height = 125
-        .DisableMoveResizeUI = True
-        .Locked = True
-    End With
-
-ExitPoint:
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise( _
-            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Sub
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-29
-' Parameters:    Fund slicer.
-' Returns:       ---
-' Description:   Applies the fixed Fund slicer layout without rebuilding it.
-'-------------------------------------------------------------------------------
-Private Sub ApplyFundSlicerLayout(ByVal slFund As Excel.Slicer)
-    Const METHOD_NAME As String = "ApplyFundSlicerLayout"
-    Dim errDescription As String
-    Dim errNumber As Long
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    If slFund Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_OUTPUT, METHOD_NAME, "Fund slicer is not available.")
-    End If
-
-    With slFund
-        .DisplayHeader = True
-        .NumberOfColumns = 3
-        .ColumnWidth = 95
-        .RowHeight = 22
-        .Left = 230
-        .Top = 8
-        .Width = 330
-        .Height = 125
-        .DisableMoveResizeUI = True
-        .Locked = True
-    End With
-
-ExitPoint:
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise( _
-            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Sub
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
