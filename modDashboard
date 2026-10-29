@@ -5,14 +5,15 @@ Private Const CLASS_NAME As String = "modDashboard"
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-26
-' Parameters:    Workbook, Transactions worksheet and last transaction row.
+' Parameters:    Workbook, Transactions worksheet, last row and optional rebuild flag.
 ' Returns:       ---
 ' Description:   Creates Team/Fund slicers above the Combined transaction table.
 '-------------------------------------------------------------------------------
 Public Sub EnsureCombinedDashboard( _
     ByVal wkbTarget As Excel.Workbook, _
     ByVal wksTransactions As Excel.Worksheet, _
-    ByVal lngLastRow As Long)
+    ByVal lngLastRow As Long, _
+    Optional ByVal blnForceRebuild As Boolean = False)
 
     Const METHOD_NAME As String = "EnsureCombinedDashboard"
     Dim errDescription As String
@@ -409,3 +410,4 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Sub
+
