@@ -17,14 +17,30 @@ Public Function DownloadCashTransactionAttachments( _
     ByRef dictAttachmentSubjects As Object, _
     ByRef dictProcessedMailSubjects As Object) As Collection
     Const METHOD_NAME As String = "DownloadCashTransactionAttachments"
-    Dim colAttachmentPaths As Collection
     Dim blnSenderMatches As Boolean
+    Dim colAttachmentPaths As Collection
+    Dim dblFilterSeconds As Double
+    Dim dblLookupSeconds As Double
+    Dim dblSaveSeconds As Double
+    Dim dblScanSeconds As Double
+    Dim dblSenderSeconds As Double
+    Dim dblStarted As Double
+    Dim dblSubStepStarted As Double
+    Dim dictSenderCache As Object
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngAttachment As Long
+    Dim lngAttachmentCount As Long
+    Dim lngCacheHits As Long
     Dim lngItem As Long
+    Dim lngMatchedAttachmentMails As Long
+    Dim lngMailsWithAttachments As Long
+    Dim lngRestrictedCount As Long
     Dim lngSavedForMail As Long
+    Dim lngSubjectMatches As Long
+    Dim lngSenderResolutions As Long
     Dim objAttachment As Object
+    Dim objAttachments As Object
     Dim objItem As Object
     Dim objItems As Object
     Dim objMail As Object
@@ -38,6 +54,7 @@ Public Function DownloadCashTransactionAttachments( _
     Dim strCurrentSenderEmail As String
     Dim strExtension As String
     Dim strFilter As String
+    Dim strRawSenderKey As String
     Dim strSafeFileName As String
     Dim strSourceFolderEntryId As String
     Dim strSourceStoreId As String
@@ -50,76 +67,151 @@ Public Function DownloadCashTransactionAttachments( _
     dictAttachmentSubjects.CompareMode = vbTextCompare
     Set dictProcessedMailSubjects = CreateObject("Scripting.Dictionary")
     dictProcessedMailSubjects.CompareMode = vbBinaryCompare
+    Set dictSenderCache = CreateObject("Scripting.Dictionary")
+    dictSenderCache.CompareMode = vbTextCompare
+
+    dblStarted = CDbl(VBA.Timer)
     Set objOutlook = CreateObject("Outlook.Application")
     Set objNamespace = objOutlook.GetNamespace("MAPI")
     Set objRootFolder = GetMailboxRootFolder(objNamespace, appConfig.OutlookMailbox)
     Set objSourceFolder = GetFolderByPath(objRootFolder, appConfig.OutlookSourceFolder)
     strSourceStoreId = CStr(objSourceFolder.StoreID)
     strSourceFolderEntryId = CStr(objSourceFolder.EntryID)
+    dblLookupSeconds = ElapsedOutlookSeconds(dblStarted)
 
+    dblStarted = CDbl(VBA.Timer)
     Set objItems = objSourceFolder.Items
     strFilter = BuildSubjectFilter(appConfig.OutlookSubjectPrefix)
     Set objRestrictedItems = objItems.Restrict(strFilter)
-    For lngItem = objRestrictedItems.Count To 1 Step -1
+    lngRestrictedCount = CLng(objRestrictedItems.Count)
+    dblFilterSeconds = ElapsedOutlookSeconds(dblStarted)
+
+    dblStarted = CDbl(VBA.Timer)
+    For lngItem = lngRestrictedCount To 1 Step -1
         Set objItem = objRestrictedItems.Item(lngItem)
 
         If CLng(objItem.Class) = OL_MAIL_ITEM_CLASS Then
             Set objMail = objItem
             strCurrentMailSubject = CStr(objMail.Subject)
 
-            If SubjectContainsConfiguredPhrase(strCurrentMailSubject, appConfig.OutlookSubjectPrefix) Then
-                blnSenderMatches = True
-                strCurrentSenderEmail = vbNullString
+            If SubjectContainsConfiguredPhrase( _
+                strCurrentMailSubject, appConfig.OutlookSubjectPrefix) Then
 
-                If Len(Trim$(appConfig.OutlookSenderEmail)) > 0 Then
-                    strCurrentSenderEmail = GetSenderSmtpAddress(objMail)
-                    blnSenderMatches = ValueMatchesAnyExactOption( _
-                        strCurrentSenderEmail, appConfig.OutlookSenderEmail)
-                End If
+                lngSubjectMatches = lngSubjectMatches + 1
+                Set objAttachments = objMail.Attachments
+                lngAttachmentCount = CLng(objAttachments.Count)
 
-                If blnSenderMatches Then
-                    lngSavedForMail = 0
+                ' No qualifying Excel file is possible without any attachment.
+                ' Avoid Exchange sender lookup for these messages.
+                If lngAttachmentCount > 0 Then
+                    lngMailsWithAttachments = lngMailsWithAttachments + 1
+                    blnSenderMatches = True
+                    strCurrentSenderEmail = vbNullString
 
-                    For lngAttachment = 1 To objMail.Attachments.Count
-                        Set objAttachment = objMail.Attachments.Item(lngAttachment)
-                        strAttachmentFileName = CStr(objAttachment.FileName)
-                        strExtension = GetFileExtension(strAttachmentFileName)
+                    If Len(Trim$(appConfig.OutlookSenderEmail)) > 0 Then
+                        dblSubStepStarted = CDbl(VBA.Timer)
 
-                        If ValueStartsWithAnyOption( _
-                            strAttachmentFileName, _
-                            appConfig.OutlookAttachmentPrefix) Then
-                            If strExtension = ".xlsx" Or strExtension = ".xls" Then
-                                strSafeFileName = _
-                                    Format$( _
-                                        CDate(objMail.ReceivedTime), _
-                                        "yyyymmdd_hhnnss") & "_" & _
-                                    Format$(lngItem, "0000") & "_" & _
-                                    Format$(lngAttachment, "00") & "_" & _
-                                    SanitizeFileNamePart(strAttachmentFileName)
-                                strTargetPath = CombinePath(strWorkspace, strSafeFileName)
-                                Call objAttachment.SaveAsFile(strTargetPath)
-                                colAttachmentPaths.Add strTargetPath
-                                dictAttachmentSubjects(strTargetPath) = strCurrentMailSubject
-                                lngSavedForMail = lngSavedForMail + 1
+                        ' Only Exchange address-book resolutions are cached.
+                        ' The key is the original EX address and lives for one run only.
+                        If StrComp( _
+                            CStr(objMail.SenderEmailType), "EX", vbTextCompare) = 0 Then
+                            strRawSenderKey = Trim$(CStr(objMail.SenderEmailAddress))
+
+                            If Len(strRawSenderKey) > 0 And _
+                                dictSenderCache.Exists(strRawSenderKey) Then
+                                strCurrentSenderEmail = _
+                                    CStr(dictSenderCache(strRawSenderKey))
+                                lngCacheHits = lngCacheHits + 1
+                            Else
+                                strCurrentSenderEmail = GetSenderSmtpAddress(objMail)
+                                lngSenderResolutions = lngSenderResolutions + 1
+                                If Len(strRawSenderKey) > 0 Then
+                                    dictSenderCache(strRawSenderKey) = strCurrentSenderEmail
+                                End If
                             End If
+                        Else
+                            ' SMTP sender requires no Exchange address-book call.
+                            strCurrentSenderEmail = _
+                                LCase$(Trim$(CStr(objMail.SenderEmailAddress)))
                         End If
 
-                        Set objAttachment = Nothing
-                    Next lngAttachment
+                        blnSenderMatches = ValueMatchesAnyExactOption( _
+                            strCurrentSenderEmail, appConfig.OutlookSenderEmail)
+                        dblSenderSeconds = dblSenderSeconds + _
+                            ElapsedOutlookSeconds(dblSubStepStarted)
+                    End If
 
-                    If lngSavedForMail > 0 Then
-                        dictProcessedMailSubjects(CStr(objMail.EntryID)) = _
-                            Array( _
-                                strCurrentMailSubject, strSourceStoreId, _
-                                strSourceFolderEntryId)
+                    If blnSenderMatches Then
+                        lngSavedForMail = 0
+
+                        For lngAttachment = 1 To lngAttachmentCount
+                            Set objAttachment = objAttachments.Item(lngAttachment)
+                            strAttachmentFileName = CStr(objAttachment.FileName)
+                            strExtension = GetFileExtension(strAttachmentFileName)
+
+                            If ValueStartsWithAnyOption( _
+                                strAttachmentFileName, _
+                                appConfig.OutlookAttachmentPrefix) Then
+                                If strExtension = ".xlsx" Or strExtension = ".xls" Then
+                                    strSafeFileName = _
+                                        Format$( _
+                                            CDate(objMail.ReceivedTime), _
+                                            "yyyymmdd_hhnnss") & "_" & _
+                                        Format$(lngItem, "0000") & "_" & _
+                                        Format$(lngAttachment, "00") & "_" & _
+                                        SanitizeFileNamePart(strAttachmentFileName)
+                                    strTargetPath = CombinePath(strWorkspace, strSafeFileName)
+
+                                    dblSubStepStarted = CDbl(VBA.Timer)
+                                    Call objAttachment.SaveAsFile(strTargetPath)
+                                    dblSaveSeconds = dblSaveSeconds + _
+                                        ElapsedOutlookSeconds(dblSubStepStarted)
+
+                                    colAttachmentPaths.Add strTargetPath
+                                    dictAttachmentSubjects(strTargetPath) = strCurrentMailSubject
+                                    lngSavedForMail = lngSavedForMail + 1
+                                End If
+                            End If
+
+                            Set objAttachment = Nothing
+                        Next lngAttachment
+
+                        If lngSavedForMail > 0 Then
+                            dictProcessedMailSubjects(CStr(objMail.EntryID)) = _
+                                Array( _
+                                    strCurrentMailSubject, strSourceStoreId, _
+                                    strSourceFolderEntryId)
+                            lngMatchedAttachmentMails = lngMatchedAttachmentMails + 1
+                        End If
                     End If
                 End If
             End If
         End If
 
+        Set objAttachment = Nothing
+        Set objAttachments = Nothing
         Set objMail = Nothing
         Set objItem = Nothing
     Next lngItem
+
+    dblScanSeconds = ElapsedOutlookSeconds(dblStarted)
+    Debug.Print "Dallas PERF | Outlook lookup mailbox/folder | " & _
+        Format$(dblLookupSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook Restrict and Count | " & _
+        Format$(dblFilterSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook sender resolution | " & _
+        Format$(dblSenderSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook SaveAsFile | " & _
+        Format$(dblSaveSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook remaining mail scan | " & _
+        Format$(dblScanSeconds - dblSenderSeconds - dblSaveSeconds, "0.0") & " s"
+    Debug.Print "Dallas PERF | Outlook candidate / subject / saved mails / files | " & _
+        lngRestrictedCount & " / " & lngSubjectMatches & " / " & _
+        lngMatchedAttachmentMails & " / " & colAttachmentPaths.Count
+    Debug.Print "Dallas PERF | Outlook subject mails with attachments | " & _
+        lngMailsWithAttachments
+    Debug.Print "Dallas PERF | Outlook EX lookups / cached hits | " & _
+        lngSenderResolutions & " / " & lngCacheHits
 
     If colAttachmentPaths.Count = 0 Then
         If Len(Trim$(appConfig.OutlookSenderEmail)) > 0 Then
@@ -138,6 +230,7 @@ Public Function DownloadCashTransactionAttachments( _
 
 ExitPoint:
     Set objAttachment = Nothing
+    Set objAttachments = Nothing
     Set objMail = Nothing
     Set objItem = Nothing
     Set objRestrictedItems = Nothing
@@ -146,10 +239,13 @@ ExitPoint:
     Set objRootFolder = Nothing
     Set objNamespace = Nothing
     Set objOutlook = Nothing
+    Set dictSenderCache = Nothing
 
     If errNumber = 0 Then Set DownloadCashTransactionAttachments = colAttachmentPaths
     Set colAttachmentPaths = Nothing
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -175,6 +271,13 @@ Public Function ArchiveProcessedOutlookMessages( _
     Const METHOD_NAME As String = "ArchiveProcessedOutlookMessages"
     Dim arrEntryIds As Variant
     Dim arrMailInfo As Variant
+    Dim blnSameStore As Boolean
+    Dim dblLookupSeconds As Double
+    Dim dblMoveSeconds As Double
+    Dim dblSetupSeconds As Double
+    Dim dblStarted As Double
+    Dim dblStepStarted As Double
+    Dim dblTotalSeconds As Double
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngArchivedCount As Long
@@ -194,6 +297,7 @@ Public Function ArchiveProcessedOutlookMessages( _
     If appConfig.ArchiveOutlookMessages Then
         If Not dictProcessedMailSubjects Is Nothing Then
             If dictProcessedMailSubjects.Count > 0 Then
+                dblStarted = CDbl(VBA.Timer)
                 Set objOutlook = CreateObject("Outlook.Application")
                 Set objNamespace = objOutlook.GetNamespace("MAPI")
                 Set objRootFolder = GetMailboxRootFolder( _
@@ -206,15 +310,20 @@ Public Function ArchiveProcessedOutlookMessages( _
                     CStr(arrEntryIds(LBound(arrEntryIds))))
                 strSourceStoreId = CStr(arrMailInfo(1))
                 strSourceFolderEntryId = CStr(arrMailInfo(2))
+                blnSameStore = ( _
+                    StrComp( _
+                        strSourceStoreId, CStr(objArchiveFolder.StoreID), _
+                        vbBinaryCompare) = 0)
 
                 If StrComp( _
                     strSourceFolderEntryId, CStr(objArchiveFolder.EntryID), _
                     vbBinaryCompare) = 0 Then
-
                     Call VBA.Err.Raise( _
                         ERROR_OUTLOOK, METHOD_NAME, _
                         "Outlook source and archive folders resolve to the same folder.")
                 End If
+
+                dblSetupSeconds = ElapsedOutlookSeconds(dblStarted)
 
                 For lngItem = LBound(arrEntryIds) To UBound(arrEntryIds)
                     strCurrentEntryId = CStr(arrEntryIds(lngItem))
@@ -226,14 +335,16 @@ Public Function ArchiveProcessedOutlookMessages( _
                         StrComp( _
                             CStr(arrMailInfo(2)), strSourceFolderEntryId, _
                             vbBinaryCompare) <> 0 Then
-
                         Call VBA.Err.Raise( _
                             ERROR_OUTLOOK, METHOD_NAME, _
                             "Processed Outlook messages do not originate from one source folder.")
                     End If
 
+                    dblStepStarted = CDbl(VBA.Timer)
                     Set objItem = objNamespace.GetItemFromID( _
                         strCurrentEntryId, strSourceStoreId)
+                    dblLookupSeconds = dblLookupSeconds + _
+                        ElapsedOutlookSeconds(dblStepStarted)
 
                     If objItem Is Nothing Then
                         Call VBA.Err.Raise( _
@@ -247,11 +358,32 @@ Public Function ArchiveProcessedOutlookMessages( _
                             "A processed Outlook item is no longer a mail item.")
                     End If
 
+                    ' Archive only after the complete reporting process succeeded.
+                    ' Outlook COM moves one MailItem at a time.
+                    dblStepStarted = CDbl(VBA.Timer)
                     Set objMovedMail = objItem.Move(objArchiveFolder)
+                    dblMoveSeconds = dblMoveSeconds + _
+                        ElapsedOutlookSeconds(dblStepStarted)
+
                     lngArchivedCount = lngArchivedCount + 1
                     Set objMovedMail = Nothing
                     Set objItem = Nothing
                 Next lngItem
+
+                dblTotalSeconds = ElapsedOutlookSeconds(dblStarted)
+                Debug.Print "Dallas PERF | Outlook archive folder lookup | " & _
+                    Format$(dblSetupSeconds, "0.0") & " s"
+                Debug.Print "Dallas PERF | Outlook archive GetItemFromID | " & _
+                    Format$(dblLookupSeconds, "0.0") & " s"
+                Debug.Print "Dallas PERF | Outlook archive MailItem.Move | " & _
+                    Format$(dblMoveSeconds, "0.0") & " s"
+                Debug.Print "Dallas PERF | Outlook archive remaining overhead | " & _
+                    Format$(dblTotalSeconds - dblSetupSeconds - _
+                    dblLookupSeconds - dblMoveSeconds, "0.0") & " s"
+                Debug.Print "Dallas PERF | Outlook archived mail count | " & _
+                    lngArchivedCount
+                Debug.Print "Dallas PERF | Outlook archive in same store | " & _
+                    CStr(blnSameStore)
             End If
         End If
     End If
@@ -279,6 +411,7 @@ ErrHandler:
         appConfig.OutlookArchiveFolder, lngItem)
     GoTo ExitPoint
 End Function
+
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
@@ -728,3 +861,35 @@ ErrHandler:
     GoTo ExitPoint
 End Function
 
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    dblStartedAt As Double
+' Returns:       Double
+' Description:   Returns elapsed seconds, including a midnight wrap.
+'-------------------------------------------------------------------------------
+Private Function ElapsedOutlookSeconds(ByVal dblStartedAt As Double) As Double
+    Const METHOD_NAME As String = "ElapsedOutlookSeconds"
+    Dim dblResult As Double
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    dblResult = CDbl(VBA.Timer) - dblStartedAt
+    If dblResult < 0# Then dblResult = dblResult + 86400#
+
+ExitPoint:
+    If errNumber = 0 Then ElapsedOutlookSeconds = dblResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
