@@ -262,8 +262,14 @@ Private Function BuildEmailBodyHtml( _
         appConfig, strLocalFolder, strSharePointUrl, strSharePointFolder)
 
     If InStr(1, strTemplate, "[MASTER_HISTORICAL_FOLDER]", vbTextCompare) > 0 Then
+        If Not appConfig.SaveLocal Then
+            Call VBA.Err.Raise( _
+                ERROR_EMAIL, METHOD_NAME, _
+                "[MASTER_HISTORICAL_FOLDER] requires enabled local output " & _
+                "(FLAG_SAVE_LOCAL = TRUE).")
+        End If
         strHistoricalFolderHtml = BuildMasterHistoricalFolderHtml( _
-            appConfig.MasterHistoricalFolderPath)
+            appConfig.OutputLocalBase)
     End If
 
     strResult = RenderMailTemplateHtml( _
@@ -1011,7 +1017,7 @@ End Function
 ' Creation date: 2026-10-29
 ' Parameters:    strConfiguredFolder As String
 ' Returns:       String
-' Description:   Renders a fixed local/UNC historical folder link like OUTPUT_LOCATIONS.
+' Description:   Links to the historical master root from OUTPUT_LOCAL_BASE.
 '-------------------------------------------------------------------------------
 Private Function BuildMasterHistoricalFolderHtml( _
     ByVal strConfiguredFolder As String) As String
@@ -1027,17 +1033,17 @@ Private Function BuildMasterHistoricalFolderHtml( _
     If Len(Trim$(strConfiguredFolder)) = 0 Then
         Call VBA.Err.Raise( _
             ERROR_EMAIL, METHOD_NAME, _
-            "MASTER_HISTORICAL_FOLDER_PATH is required when the mail template " & _
+            "OUTPUT_LOCAL_BASE is required when the mail template " & _
             "contains [MASTER_HISTORICAL_FOLDER].")
     End If
 
     If IsHttpPath(strConfiguredFolder) Then
         Call VBA.Err.Raise( _
             ERROR_EMAIL, METHOD_NAME, _
-            "MASTER_HISTORICAL_FOLDER_PATH must be a local drive or UNC path.")
+            "OUTPUT_LOCAL_BASE must be a local drive or UNC path.")
     End If
 
-    strFolder = ResolveConfiguredPath(strConfiguredFolder)
+    strFolder = ResolveOutputPath(strConfiguredFolder)
 
     If Left$(strFolder, 2) = "\\" Then
         strHref = "file:" & Replace$(strFolder, "\", "/")
@@ -1046,7 +1052,7 @@ Private Function BuildMasterHistoricalFolderHtml( _
     Else
         Call VBA.Err.Raise( _
             ERROR_EMAIL, METHOD_NAME, _
-            "MASTER_HISTORICAL_FOLDER_PATH must be a full drive or UNC path.")
+            "OUTPUT_LOCAL_BASE must resolve to a full drive or UNC path.")
     End If
 
     strResult = "<a href='" & HtmlEncode(strHref) & "'>" & _
