@@ -360,7 +360,12 @@ Private Function EnsureTransactionsTable( _
             xlSrcRange, rngTable, , xlYes)
         lstResult.Name = TRANSACTIONS_TABLE_NAME
     Else
-        Call lstResult.Resize(rngTable)
+        If StrComp( _
+            lstResult.Range.Address, _
+            rngTable.Address, vbBinaryCompare) <> 0 Then
+
+            Call lstResult.Resize(rngTable)
+        End If
     End If
 
     lstResult.ShowHeaders = True
@@ -550,4 +555,5 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Sub
+
 
