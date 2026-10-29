@@ -1573,21 +1573,29 @@ Public Function GetLatestFile(ByVal strFolderPath As String, ByVal strFilePatter
     Dim strLatestFile As String
     Dim strMaximumName As String
     Dim strResolvedFolder As String
+    Dim dtStepStarted As Date
+    Dim lngMatchedFiles As Long
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     strResolvedFolder = ResolveConfiguredPath(strFolderPath)
     Set objFileSystem = CreateObject("Scripting.FileSystemObject")
 
+    dtStepStarted = Now
     If Not objFileSystem.FolderExists(strResolvedFolder) Then
         Call VBA.Err.Raise( _
             ERROR_FILE_SYSTEM, METHOD_NAME, _
             "Configured folder does not exist: " & strResolvedFolder)
     End If
 
+    Debug.Print "Dallas PERF | Fondsliste folder check | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
+
+    dtStepStarted = Now
     strFileName = Dir$(CombinePath(strResolvedFolder, strFilePattern))
 
     Do While Len(strFileName) > 0
+        lngMatchedFiles = lngMatchedFiles + 1
         If UCase$(strFileName) > UCase$(strMaximumName) Then
             strMaximumName = strFileName
             strLatestFile = CombinePath(strResolvedFolder, strFileName)
@@ -1595,6 +1603,9 @@ Public Function GetLatestFile(ByVal strFolderPath As String, ByVal strFilePatter
 
         strFileName = Dir$()
     Loop
+    Debug.Print "Dallas PERF | Fondsliste directory listing (" & _
+        CStr(lngMatchedFiles) & " matches) | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
 
 ExitPoint:
     Set objFileSystem = Nothing
