@@ -16,12 +16,16 @@ Public Function GetLatestFondslistePath(ByRef appConfig As TAppConfig) As String
     Dim strFolderPath As String
     Dim strResult As String
     Dim strSearchPattern As String
+    Dim dtStepStarted As Date
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
+    dtStepStarted = Now
     strFolderPath = ResolveConfiguredPath(appConfig.FondslisteFolder)
     strSearchPattern = BuildFondslisteSearchPattern( _
         appConfig.FondslistePattern, appConfig.FondslisteExtension)
+    Debug.Print "Dallas PERF | Fondsliste resolve settings | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
     strResult = GetLatestFile(strFolderPath, strSearchPattern)
 
     If Len(strResult) = 0 Then
@@ -141,16 +145,22 @@ End Function
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
-' Parameters:    strFondslistePath As String
+' Parameters:    strFondslistePath; blnUseLocalCopy; strWorkspace
 ' Returns:       Object
 ' Description:   Builds one Open Fund Number to Team dictionary in memory.
+'                Optional local staging avoids Excel opening remote files directly.
 '-------------------------------------------------------------------------------
-Public Function BuildOpenFundTeamDictionary(ByVal strFondslistePath As String) As Object
+Public Function BuildOpenFundTeamDictionary( _
+    ByVal strFondslistePath As String, _
+    ByVal blnUseLocalCopy As Boolean, _
+    ByVal strWorkspace As String) As Object
+
     Const METHOD_NAME As String = "BuildOpenFundTeamDictionary"
     Dim arrData As Variant
     Dim blnCloseRequired As Boolean
     Dim cleanupErrNumber As Long
     Dim dictTeams As Object
+    Dim dtStepStarted As Date
     Dim errDescription As String
     Dim errNumber As Long
     Dim handlerErrDescription As String
@@ -158,6 +168,8 @@ Public Function BuildOpenFundTeamDictionary(ByVal strFondslistePath As String) A
     Dim lngLastRow As Long
     Dim lngRow As Long
     Dim strFundNumber As String
+    Dim strOpenPath As String
+    Dim strStagedCopyPath As String
     Dim strStatus As String
     Dim strTeam As String
     Dim wkbAlreadyOpen As Excel.Workbook
@@ -168,16 +180,40 @@ Public Function BuildOpenFundTeamDictionary(ByVal strFondslistePath As String) A
 
     Set dictTeams = CreateObject("Scripting.Dictionary")
     dictTeams.CompareMode = vbTextCompare
+    strOpenPath = strFondslistePath
 
+    dtStepStarted = Now
     Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strFondslistePath, True)
+    Debug.Print "Dallas PERF | Fondsliste existing-workbook lookup | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
 
     If wkbAlreadyOpen Is Nothing Then
+        If blnUseLocalCopy Then
+            If Len(Trim$(strWorkspace)) = 0 Then
+                Call VBA.Err.Raise( _
+                    ERROR_FONDSLISTE, METHOD_NAME, _
+                    "Temporary workspace is required for Fondsliste local copy.")
+            End If
+
+            strStagedCopyPath = CombinePath( _
+                strWorkspace, "DallasFondsliste_" & GetFileNameFromPath(strFondslistePath))
+            dtStepStarted = Now
+            Call VBA.FileCopy(strFondslistePath, strStagedCopyPath)
+            Debug.Print "Dallas PERF | Fondsliste network-to-local copy | " & _
+                CStr(DateDiff("s", dtStepStarted, Now)) & " s"
+            strOpenPath = strStagedCopyPath
+        End If
+
+        dtStepStarted = Now
         Set wkbFonds = Application.Workbooks.Open( _
-            Filename:=strFondslistePath, UpdateLinks:=0, ReadOnly:=True, _
+            Filename:=strOpenPath, UpdateLinks:=0, ReadOnly:=True, _
             IgnoreReadOnlyRecommended:=True, AddToMru:=False, Notify:=False)
         blnCloseRequired = True
+        Debug.Print "Dallas PERF | Fondsliste Workbooks.Open | " & _
+            CStr(DateDiff("s", dtStepStarted, Now)) & " s"
     Else
         Set wkbFonds = wkbAlreadyOpen
+        Debug.Print "Dallas PERF | Fondsliste already open: reused workbook"
     End If
 
     If wkbFonds Is Nothing Then
@@ -191,6 +227,7 @@ Public Function BuildOpenFundTeamDictionary(ByVal strFondslistePath As String) A
             "The Fondsliste workbook does not contain a worksheet.")
     End If
 
+    dtStepStarted = Now
     Set wksFonds = wkbFonds.Worksheets(1)
     lngLastRow = wksFonds.Cells(wksFonds.Rows.Count, 4).End(xlUp).Row
 
@@ -200,8 +237,12 @@ Public Function BuildOpenFundTeamDictionary(ByVal strFondslistePath As String) A
             "No fund records were found in Fondsliste column D.")
     End If
 
-    arrData = wksFonds.Range("A" & CStr(FONDSLISTE_FIRST_DATA_ROW) & ":O" & CStr(lngLastRow)).Value2
+    arrData = wksFonds.Range( _
+        "A" & CStr(FONDSLISTE_FIRST_DATA_ROW) & ":O" & CStr(lngLastRow)).Value2
+    Debug.Print "Dallas PERF | Fondsliste worksheet read | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
 
+    dtStepStarted = Now
     For lngRow = 1 To UBound(arrData, 1)
         strStatus = Trim$(CStr(arrData(lngRow, 2)))
         strFundNumber = Trim$(CStr(arrData(lngRow, 4)))
@@ -211,6 +252,9 @@ Public Function BuildOpenFundTeamDictionary(ByVal strFondslistePath As String) A
             If Len(strFundNumber) > 0 Then dictTeams(strFundNumber) = strTeam
         End If
     Next lngRow
+    Debug.Print "Dallas PERF | Fondsliste dictionary build (" & _
+        CStr(dictTeams.Count) & " open funds) | " & _
+        CStr(DateDiff("s", dtStepStarted, Now)) & " s"
 
 ExitPoint:
     Set wksFonds = Nothing
@@ -218,7 +262,10 @@ ExitPoint:
 
     If blnCloseRequired Then
         blnCloseRequired = False
+        dtStepStarted = Now
         cleanupErrNumber = CloseWorkbookSafely(wkbFonds, False)
+        Debug.Print "Dallas PERF | Fondsliste Workbooks.Close | " & _
+            CStr(DateDiff("s", dtStepStarted, Now)) & " s"
 
         If errNumber = 0 And cleanupErrNumber <> 0 Then
             errNumber = cleanupErrNumber
@@ -228,9 +275,22 @@ ExitPoint:
 
     Set wkbFonds = Nothing
 
+    If Len(strStagedCopyPath) > 0 Then
+        dtStepStarted = Now
+        cleanupErrNumber = DeleteStagedFondslisteFileSafely(strStagedCopyPath)
+        Debug.Print "Dallas PERF | Fondsliste delete local copy | " & _
+            CStr(DateDiff("s", dtStepStarted, Now)) & " s"
+        If errNumber = 0 And cleanupErrNumber <> 0 Then
+            errNumber = cleanupErrNumber
+            errDescription = "The temporary Fondsliste file could not be deleted."
+        End If
+    End If
+
     If errNumber = 0 Then Set BuildOpenFundTeamDictionary = dictTeams
     Set dictTeams = Nothing
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
@@ -238,12 +298,47 @@ ErrHandler:
     handlerErrDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, handlerErrNumber, handlerErrDescription, _
-        "fondslistePath;row", strFondslistePath, lngRow)
+        "fondslistePath;row;localCopy", _
+        strFondslistePath, lngRow, blnUseLocalCopy)
 
     If errNumber = 0 Then
         errNumber = handlerErrNumber
         errDescription = handlerErrDescription
     End If
 
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strFilePath As String
+' Returns:       Long (0 = successful cleanup)
+' Description:   Removes a staged Fondsliste without masking a previous error.
+'-------------------------------------------------------------------------------
+Private Function DeleteStagedFondslisteFileSafely(ByVal strFilePath As String) As Long
+    Const METHOD_NAME As String = "DeleteStagedFondslisteFileSafely"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objFileSystem As Object
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set objFileSystem = CreateObject("Scripting.FileSystemObject")
+    If objFileSystem.FileExists(strFilePath) Then
+        Call objFileSystem.DeleteFile(strFilePath, True)
+    End If
+
+ExitPoint:
+    Set objFileSystem = Nothing
+    DeleteStagedFondslisteFileSafely = errNumber
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "filePath", strFilePath)
     GoTo ExitPoint
 End Function
