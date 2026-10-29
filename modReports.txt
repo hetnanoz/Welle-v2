@@ -322,7 +322,7 @@ Private Sub CreateReportWorkbook( _
             lngLastSheetRow, OUTPUT_COLUMN_COUNT)).Value2 = arrReport
 
     Call FormatTransactionWorksheet( _
-        wksTransactions, lngHeaderRow, lngLastSheetRow)
+        wksTransactions, lngHeaderRow, lngLastSheetRow, blnCombinedReport)
 
     If blnCombinedReport Then
         Call EnsureCombinedDashboard( _
@@ -437,7 +437,8 @@ End Sub
 Private Sub FormatTransactionWorksheet( _
     ByVal wksTransactions As Excel.Worksheet, _
     ByVal lngHeaderRow As Long, _
-    ByVal lngLastRow As Long)
+    ByVal lngLastRow As Long, _
+    ByVal blnCombinedReport As Boolean)
     Const METHOD_NAME As String = "FormatTransactionWorksheet"
     Dim errDescription As String
     Dim errNumber As Long
@@ -461,7 +462,8 @@ Private Sub FormatTransactionWorksheet( _
         .WrapText = True
     End With
 
-    Call rngTable.AutoFilter
+    ' Combined reports receive the table AutoFilter in EnsureCombinedDashboard.
+    If Not blnCombinedReport Then Call rngTable.AutoFilter
 
     wksTransactions.Columns("C:D").NumberFormat = "dd.mm.yyyy"
     wksTransactions.Columns("H:I").NumberFormat = "dd.mm.yyyy"
@@ -523,4 +525,5 @@ ErrHandler:
     Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "padding", dblPadding)
     GoTo ExitPoint
 End Sub
+
 
