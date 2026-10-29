@@ -32,6 +32,7 @@ Public Const NAME_CREATE_EMAIL_DRAFT As String = "CREATE_EMAIL_DRAFT"
 Public Const NAME_MAIL_SUBJECT As String = "MAIL_SUBJECT"
 Public Const NAME_MAIL_BODY As String = "MAIL_BODY"
 Public Const NAME_MAIL_BODY_NO_TEAMS As String = "MAIL_BODY_NO_TEAMS"
+Public Const NAME_MAIL_BODY_COMBINED_ONLY As String = "MAIL_BODY_COMBINED_ONLY"
 Public Const NAME_MAIL_TO As String = "MAIL_TO"
 Public Const NAME_MAIL_CC As String = "MAIL_CC"
 Public Const NAME_MAIL_FROM As String = "MAIL_FROM"
@@ -89,5 +90,6 @@ Public Const ERROR_OUTPUT As Long = 1601
 Public Const ERROR_HISTORICAL As Long = 1701
 Public Const ERROR_FILE_SYSTEM As Long = 1801
 Public Const ERROR_EMAIL As Long = 1901
+
 
 
