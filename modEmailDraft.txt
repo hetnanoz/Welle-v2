@@ -222,7 +222,6 @@ Private Function BuildEmailBodyHtml( _
     Dim errNumber As Long
     Dim lngTransactionCount As Long
     Dim lngUnknownCount As Long
-    Dim strImportantHtml As String
     Dim strOutputLocationsHtml As String
     Dim strResult As String
     Dim strTeamsToken As String
@@ -286,19 +285,11 @@ Private Function BuildEmailBodyHtml( _
     strOutputLocationsHtml = BuildOutputLocationsHtml( _
         appConfig, strLocalFolder, strSharePointUrl, strSharePointFolder)
 
-    strImportantHtml = HtmlEncode(COMBINED_IMPORTANT_MESSAGE)
-    strImportantHtml = Replace$(strImportantHtml, vbCrLf, "<br>")
-    strImportantHtml = Replace$(strImportantHtml, vbLf, "<br>")
-    strImportantHtml = Replace$( _
-        strImportantHtml, _
-        "[Fund Number]<br>Current mapping:", _
-        "[Fund Number]<br><br>Current mapping:", _
-        1, -1, vbTextCompare)
-
+    ' The email notice is fully controlled by the selected Mapping mail body.
+    ' Keep the output-location hyperlinks, without appending a hardcoded notice.
     strResult = Replace$( _
         strResult, HtmlEncode(OUTPUT_LOCATIONS_PLACEHOLDER), _
-        strOutputLocationsHtml & "<br><br><b><span style='color:#C00000;'>" & _
-        strImportantHtml & "</span></b>")
+        strOutputLocationsHtml)
 
 ExitPoint:
     If errNumber = 0 Then BuildEmailBodyHtml = strResult
@@ -713,4 +704,3 @@ ErrHandler:
     blnResult = False
     GoTo ExitPoint
 End Function
-
