@@ -1,20 +1,18 @@
 Option Explicit
 
 Private Const CLASS_NAME As String = "modDashboard"
-Private Const DAILY_REMINDER_TITLE As String = "IMPORTANT"
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-26
-' Parameters:    Workbook, Transactions sheet, last row and daily-reminder flag.
+' Parameters:    Workbook, Transactions worksheet and last transaction row.
 ' Returns:       ---
-' Description:   Creates Team/Fund slicers and optional daily reminder above the table.
+' Description:   Creates Team/Fund slicers above the Combined transaction table.
 '-------------------------------------------------------------------------------
 Public Sub EnsureCombinedDashboard( _
     ByVal wkbTarget As Excel.Workbook, _
     ByVal wksTransactions As Excel.Worksheet, _
-    ByVal lngLastRow As Long, _
-    Optional ByVal blnShowDailyReminder As Boolean = False)
+    ByVal lngLastRow As Long)
 
     Const METHOD_NAME As String = "EnsureCombinedDashboard"
     Dim errDescription As String
@@ -24,8 +22,6 @@ Public Sub EnsureCombinedDashboard( _
     Dim scTeam As Excel.SlicerCache
     Dim slFund As Excel.Slicer
     Dim slTeam As Excel.Slicer
-    Dim rngFundArea As Excel.Range
-    Dim rngTeamArea As Excel.Range
     Dim strStage As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
@@ -55,42 +51,43 @@ Public Sub EnsureCombinedDashboard( _
     strStage = "create Team slicer cache"
     Set scTeam = wkbTarget.SlicerCaches.Add2(lstTransactions, "Team")
 
-    Set rngTeamArea = wksTransactions.Range("A1:E8")
-
     strStage = "create Team slicer"
     Set slTeam = scTeam.Slicers.Add( _
-        wksTransactions, , SLICER_TEAM_NAME, "Team", _
-        rngTeamArea.Top + 4, rngTeamArea.Left + 4, _
-        rngTeamArea.Width - 8, rngTeamArea.Height - 8)
+        wksTransactions, , SLICER_TEAM_NAME, "Team", 8, 8, 210, 125)
 
     strStage = "create Fund slicer cache"
     Set scFund = wkbTarget.SlicerCaches.Add2(lstTransactions, "MF")
-    Set rngFundArea = wksTransactions.Range("F1:L8")
 
     strStage = "create Fund slicer"
     Set slFund = scFund.Slicers.Add( _
-        wksTransactions, , SLICER_FUND_NAME, "Fund", _
-        rngFundArea.Top + 4, rngFundArea.Left + 4, _
-        rngFundArea.Width - 8, rngFundArea.Height - 8)
+        wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 230, 330, 125)
 
     With slTeam
         .DisplayHeader = True
         .NumberOfColumns = 2
+        .ColumnWidth = 90
+        .RowHeight = 22
+        .Width = 210
+        .Height = 125
+        .DisableMoveResizeUI = True
         .Locked = True
     End With
 
     With slFund
         .DisplayHeader = True
         .NumberOfColumns = 3
+        .ColumnWidth = 95
+        .RowHeight = 22
+        .Width = 330
+        .Height = 125
+        .DisableMoveResizeUI = True
         .Locked = True
     End With
 
-    strStage = "configure daily reminder"
-    Call ConfigureDailyReminder(wksTransactions, blnShowDailyReminder)
+    strStage = "create or update IMPORTANT message"
+    Call EnsureImportantMessage(wksTransactions)
 
 ExitPoint:
-    Set rngFundArea = Nothing
-    Set rngTeamArea = Nothing
     Set slFund = Nothing
     Set slTeam = Nothing
     Set scFund = Nothing
@@ -110,6 +107,73 @@ ErrHandler:
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
         "stage", strStage)
+    GoTo ExitPoint
+End Sub
+
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-28
+' Parameters:    wksTransactions As Excel.Worksheet
+' Returns:       ---
+' Description:   Creates or refreshes the fixed IMPORTANT message beside slicers.
+'-------------------------------------------------------------------------------
+Private Sub EnsureImportantMessage(ByVal wksTransactions As Excel.Worksheet)
+    Const METHOD_NAME As String = "EnsureImportantMessage"
+    Const TEXT_ORIENTATION_HORIZONTAL As Long = 1
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim shpCandidate As Excel.Shape
+    Dim shpImportant As Excel.Shape
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    For Each shpCandidate In wksTransactions.Shapes
+        If StrComp( _
+            shpCandidate.Name, IMPORTANT_MESSAGE_SHAPE_NAME, _
+            vbTextCompare) = 0 Then
+
+            Set shpImportant = shpCandidate
+            Exit For
+        End If
+    Next shpCandidate
+
+    If shpImportant Is Nothing Then
+        Set shpImportant = wksTransactions.Shapes.AddTextbox( _
+            TEXT_ORIENTATION_HORIZONTAL, 575, 8, 360, 125)
+        shpImportant.Name = IMPORTANT_MESSAGE_SHAPE_NAME
+    End If
+
+    With shpImportant
+        .Left = 575
+        .Top = 8
+        .Width = 360
+        .Height = 125
+        .Placement = xlFreeFloating
+        .Locked = True
+        .TextFrame.Characters.Text = COMBINED_IMPORTANT_MESSAGE
+        .TextFrame.Characters.Font.Name = OUTPUT_HEADER_FONT_NAME
+        .TextFrame.Characters.Font.Size = OUTPUT_HEADER_FONT_SIZE
+        .TextFrame.Characters.Font.Bold = True
+        .TextFrame.Characters.Font.Color = RGB(192, 0, 0)
+        .TextFrame.HorizontalAlignment = xlLeft
+        .TextFrame.VerticalAlignment = xlVAlignCenter
+    End With
+
+ExitPoint:
+    Set shpImportant = Nothing
+    Set shpCandidate = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Sub
 
@@ -192,76 +256,6 @@ ErrHandler:
         "lastRow", lngLastRow)
     GoTo ExitPoint
 End Function
-
-
-'-------------------------------------------------------------------------------
-' Author:        Pawel Ligezka
-' Creation date: 2026-10-27
-' Parameters:    wksTransactions As Excel.Worksheet; blnShowReminder As Boolean
-' Returns:       ---
-' Description:   Shows the Daily Combined reminder in cells M1:N10.
-'-------------------------------------------------------------------------------
-Private Sub ConfigureDailyReminder( _
-    ByVal wksTransactions As Excel.Worksheet, _
-    ByVal blnShowReminder As Boolean)
-
-    Const METHOD_NAME As String = "ConfigureDailyReminder"
-    Dim errDescription As String
-    Dim errNumber As Long
-    Dim rngReminder As Excel.Range
-    Dim strReminder As String
-
-    If Not DEV_MODE Then On Error GoTo ErrHandler
-
-    Set rngReminder = wksTransactions.Range("M1:N10")
-    If rngReminder.MergeCells Then rngReminder.UnMerge
-    rngReminder.Clear
-
-    If blnShowReminder Then
-        strReminder = DAILY_REMINDER_TITLE & vbLf & _
-            "Please remember to manually review all unassigned transactions " & _
-            "(UNKNOWN TEAM / UNKNOWN FUND)." & vbLf & _
-            "If a fund is missing from the mapping, send a request to Frankfurt FA9: " & _
-            "frankfurtfa9@bnp.pl" & vbLf & _
-            "Email subject: Dallas Transactions - Mapping Request - [Fund Number]" & vbLf & _
-            "Current mapping: hidden sheet 'Static_Data'."
-
-        rngReminder.Merge
-        rngReminder.Value2 = strReminder
-
-        With rngReminder
-            .WrapText = True
-            .VerticalAlignment = xlTop
-            .HorizontalAlignment = xlLeft
-            .Interior.Color = RGB(255, 242, 204)
-            .Font.Name = OUTPUT_HEADER_FONT_NAME
-            .Font.Size = 8.5
-            .Font.Color = RGB(31, 31, 31)
-            .Characters(1, Len(DAILY_REMINDER_TITLE)).Font.Bold = True
-        End With
-
-        With rngReminder.Borders
-            .LineStyle = xlContinuous
-            .Weight = xlThin
-            .Color = RGB(191, 143, 0)
-        End With
-    End If
-
-ExitPoint:
-    Set rngReminder = Nothing
-    If errNumber <> 0 Then
-        Call VBA.Err.Raise( _
-            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
-    End If
-    Exit Sub
-
-ErrHandler:
-    errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription)
-    GoTo ExitPoint
-End Sub
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
