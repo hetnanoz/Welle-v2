@@ -12,6 +12,10 @@ Public Type TAppConfig
     OutlookMailbox As String
     OutlookSourceFolder As String
     OutlookArchiveFolder As String
+    OutlookSourceEntryId As String
+    OutlookSourceStoreId As String
+    OutlookArchiveEntryId As String
+    OutlookArchiveStoreId As String
     OutlookSubjectPrefix As String
     OutlookSenderEmail As String
     OutlookAttachmentPrefix As String
@@ -32,5 +36,6 @@ Public Type TAppConfig
     MailCc As String
     MailFrom As String
     MailSharePointUrl As String
+    MasterHistoricalFolderPath As String
 End Type
 
