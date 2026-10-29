@@ -165,6 +165,8 @@ Public Function BuildOpenFundTeamDictionary( _
     Dim errNumber As Long
     Dim handlerErrDescription As String
     Dim handlerErrNumber As Long
+    Dim lngCopyErrNumber As Long
+    Dim strCurrentOperation As String
     Dim lngLastRow As Long
     Dim lngRow As Long
     Dim strFundNumber As String
@@ -182,6 +184,7 @@ Public Function BuildOpenFundTeamDictionary( _
     dictTeams.CompareMode = vbTextCompare
     strOpenPath = strFondslistePath
 
+    strCurrentOperation = "find already-open source workbook"
     dtStepStarted = Now
     Set wkbAlreadyOpen = GetOpenWorkbookByFullName(strFondslistePath, True)
     Debug.Print "Dallas PERF | Fondsliste existing-workbook lookup | " & _
@@ -197,13 +200,27 @@ Public Function BuildOpenFundTeamDictionary( _
 
             strStagedCopyPath = CombinePath( _
                 strWorkspace, "DallasFondsliste_" & GetFileNameFromPath(strFondslistePath))
+            strCurrentOperation = "copy Fondsliste to temporary workspace"
+            Debug.Print "Dallas PERF | Fondsliste local copy | starting"
             dtStepStarted = Now
-            Call VBA.FileCopy(strFondslistePath, strStagedCopyPath)
-            Debug.Print "Dallas PERF | Fondsliste network-to-local copy | " & _
-                CStr(DateDiff("s", dtStepStarted, Now)) & " s"
-            strOpenPath = strStagedCopyPath
+
+            If TryStageFondslisteCopy( _
+                strFondslistePath, strStagedCopyPath, lngCopyErrNumber) Then
+                strOpenPath = strStagedCopyPath
+                Debug.Print "Dallas PERF | Fondsliste network-to-local copy | " & _
+                    CStr(DateDiff("s", dtStepStarted, Now)) & " s"
+            Else
+                Debug.Print "Dallas PERF | Fondsliste local copy failed (error " & _
+                    CStr(lngCopyErrNumber) & ") | " & _
+                    CStr(DateDiff("s", dtStepStarted, Now)) & " s"
+                Debug.Print "Dallas PERF | Fondsliste fallback | direct read-only opening"
+                ' The optional performance optimization must not block the run.
+                ' strOpenPath still points to the exact selected source file.
+            End If
         End If
 
+        strCurrentOperation = "open Fondsliste workbook"
+        Debug.Print "Dallas PERF | Fondsliste Workbooks.Open | starting"
         dtStepStarted = Now
         Set wkbFonds = Application.Workbooks.Open( _
             Filename:=strOpenPath, UpdateLinks:=0, ReadOnly:=True, _
@@ -227,6 +244,7 @@ Public Function BuildOpenFundTeamDictionary( _
             "The Fondsliste workbook does not contain a worksheet.")
     End If
 
+    strCurrentOperation = "read Fondsliste worksheet"
     dtStepStarted = Now
     Set wksFonds = wkbFonds.Worksheets(1)
     lngLastRow = wksFonds.Cells(wksFonds.Rows.Count, 4).End(xlUp).Row
@@ -242,6 +260,7 @@ Public Function BuildOpenFundTeamDictionary( _
     Debug.Print "Dallas PERF | Fondsliste worksheet read | " & _
         CStr(DateDiff("s", dtStepStarted, Now)) & " s"
 
+    strCurrentOperation = "build open-fund dictionary"
     dtStepStarted = Now
     For lngRow = 1 To UBound(arrData, 1)
         strStatus = Trim$(CStr(arrData(lngRow, 2)))
@@ -298,14 +317,64 @@ ErrHandler:
     handlerErrDescription = VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, handlerErrNumber, handlerErrDescription, _
-        "fondslistePath;row;localCopy", _
-        strFondslistePath, lngRow, blnUseLocalCopy)
+        "operation;row;localCopy", _
+        strCurrentOperation, lngRow, blnUseLocalCopy)
 
     If errNumber = 0 Then
         errNumber = handlerErrNumber
-        errDescription = handlerErrDescription
+        errDescription = "Operation: " & strCurrentOperation & ". " & handlerErrDescription
     End If
 
+    GoTo ExitPoint
+End Function
+
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    strSourcePath; strTargetPath; lngCopyErrNumber (output)
+' Returns:       Boolean
+' Description:   Attempts optional local staging with FileSystemObject.CopyFile.
+'                A failed staging attempt is logged and reported to the caller;
+'                the caller can safely open the same source workbook read-only.
+'-------------------------------------------------------------------------------
+Private Function TryStageFondslisteCopy( _
+    ByVal strSourcePath As String, _
+    ByVal strTargetPath As String, _
+    ByRef lngCopyErrNumber As Long) As Boolean
+
+    Const METHOD_NAME As String = "TryStageFondslisteCopy"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim objFileSystem As Object
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set objFileSystem = CreateObject("Scripting.FileSystemObject")
+    Call objFileSystem.CopyFile(strSourcePath, strTargetPath, False)
+
+    If Not objFileSystem.FileExists(strTargetPath) Then
+        Call VBA.Err.Raise( _
+            ERROR_FONDSLISTE, METHOD_NAME, "Local Fondsliste copy was not created.")
+    End If
+    If objFileSystem.GetFile(strTargetPath).Size = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_FONDSLISTE, METHOD_NAME, "Local Fondsliste copy is empty.")
+    End If
+
+    TryStageFondslisteCopy = True
+
+ExitPoint:
+    Set objFileSystem = Nothing
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    lngCopyErrNumber = errNumber
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "operation", "optional local Fondsliste copy")
     GoTo ExitPoint
 End Function
 
