@@ -19,6 +19,7 @@ Public Type TAppConfig
     FondslisteFolder As String
     FondslistePattern As String
     FondslisteExtension As String
+    FondslisteLocalCopy As Boolean
     OutputLocalBase As String
     OutputSharePointBase As String
     SupportedTeams As String
@@ -32,5 +33,4 @@ Public Type TAppConfig
     MailFrom As String
     MailSharePointUrl As String
 End Type
-
 
