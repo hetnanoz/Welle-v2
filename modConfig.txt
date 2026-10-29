@@ -95,8 +95,6 @@ Public Sub LoadConfiguration(ByRef appConfig As TAppConfig)
         appConfig.MailFrom = ReadOptionalText(strConfigName)
         strConfigName = NAME_MAIL_SHAREPOINT_URL
         appConfig.MailSharePointUrl = ReadOptionalText(strConfigName)
-        strConfigName = NAME_MASTER_HISTORICAL_FOLDER_PATH
-        appConfig.MasterHistoricalFolderPath = ReadOptionalTextIfDefined(strConfigName)
     End If
 
     If appConfig.SaveLocal Then
