@@ -36,6 +36,5 @@ Public Type TAppConfig
     MailCc As String
     MailFrom As String
     MailSharePointUrl As String
-    MasterHistoricalFolderPath As String
 End Type
 
