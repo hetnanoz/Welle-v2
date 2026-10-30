@@ -74,11 +74,15 @@ Public Sub EnsureCombinedDashboard( _
             wksTransactions, , SLICER_FUND_NAME, "Fund", 8, 230, 330, 125)
     End If
 
-    strStage = "apply Team slicer layout"
-    Call ApplyTeamSlicerLayout(slTeam)
+    ' Existing slicers already have their layout. Avoid resetting properties
+    ' during historical updates, which can raise Error 5 in some Excel states.
+    If blnRebuildSlicers Then
+        strStage = "apply Team slicer layout"
+        Call ApplyTeamSlicerLayout(slTeam)
 
-    strStage = "apply Fund slicer layout"
-    Call ApplyFundSlicerLayout(slFund)
+        strStage = "apply Fund slicer layout"
+        Call ApplyFundSlicerLayout(slFund)
+    End If
 
     strStage = "create or update IMPORTANT message"
     Call EnsureImportantMessage(wksTransactions)
@@ -169,6 +173,7 @@ Private Sub ApplyTeamSlicerLayout(ByVal slTeam As Excel.Slicer)
     Const METHOD_NAME As String = "ApplyTeamSlicerLayout"
     Dim errDescription As String
     Dim errNumber As Long
+    Dim strProperty As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
@@ -178,15 +183,25 @@ Private Sub ApplyTeamSlicerLayout(ByVal slTeam As Excel.Slicer)
     End If
 
     With slTeam
+        strProperty = "DisplayHeader"
         .DisplayHeader = True
+        strProperty = "NumberOfColumns"
         .NumberOfColumns = 2
+        strProperty = "ColumnWidth"
         .ColumnWidth = 90
+        strProperty = "RowHeight"
         .RowHeight = 22
+        strProperty = "Left"
         .Left = 8
+        strProperty = "Top"
         .Top = 8
+        strProperty = "Width"
         .Width = 210
+        strProperty = "Height"
         .Height = 125
+        strProperty = "DisableMoveResizeUI"
         .DisableMoveResizeUI = True
+        strProperty = "Locked"
         .Locked = True
     End With
 
@@ -199,7 +214,7 @@ ExitPoint:
 
 ErrHandler:
     errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
+    errDescription = "Slicer property " & strProperty & ": " & VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
@@ -216,6 +231,7 @@ Private Sub ApplyFundSlicerLayout(ByVal slFund As Excel.Slicer)
     Const METHOD_NAME As String = "ApplyFundSlicerLayout"
     Dim errDescription As String
     Dim errNumber As Long
+    Dim strProperty As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
@@ -225,15 +241,25 @@ Private Sub ApplyFundSlicerLayout(ByVal slFund As Excel.Slicer)
     End If
 
     With slFund
+        strProperty = "DisplayHeader"
         .DisplayHeader = True
+        strProperty = "NumberOfColumns"
         .NumberOfColumns = 3
+        strProperty = "ColumnWidth"
         .ColumnWidth = 95
+        strProperty = "RowHeight"
         .RowHeight = 22
+        strProperty = "Left"
         .Left = 230
+        strProperty = "Top"
         .Top = 8
+        strProperty = "Width"
         .Width = 330
+        strProperty = "Height"
         .Height = 125
+        strProperty = "DisableMoveResizeUI"
         .DisableMoveResizeUI = True
+        strProperty = "Locked"
         .Locked = True
     End With
 
@@ -246,7 +272,7 @@ ExitPoint:
 
 ErrHandler:
     errNumber = VBA.Err.Number
-    errDescription = VBA.Err.Description
+    errDescription = "Slicer property " & strProperty & ": " & VBA.Err.Description
     Call ErrorManager.addError( _
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
