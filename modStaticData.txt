@@ -70,6 +70,123 @@ ErrHandler:
     GoTo ExitPoint
 End Sub
 
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-30
+' Parameters:    ---
+' Returns:       ---
+' Description:   Reports conflicting duplicate Accounts without changing data.
+'-------------------------------------------------------------------------------
+Public Sub DiagnoseStaticDataAccountConflicts()
+    Const METHOD_NAME As String = "DiagnoseStaticDataAccountConflicts"
+    Dim arrData As Variant
+    Dim arrPreviousMapping As Variant
+    Dim dictAccounts As Object
+    Dim dictFirstRows As Object
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngConflictCount As Long
+    Dim lngLastRow As Long
+    Dim lngRow As Long
+    Dim strConflictFields As String
+    Dim strDisplayedIdentifier As String
+    Dim strFund As String
+    Dim strIdentifier As String
+    Dim strIdentifierContext As String
+    Dim strMaster As String
+    Dim strTeam As String
+    Dim wksStatic As Excel.Worksheet
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Set wksStatic = ThisWorkbook.Worksheets(SHEET_STATIC_DATA)
+    lngLastRow = GetStaticDataLastRow(wksStatic)
+    If lngLastRow < STATIC_DATA_FIRST_DATA_ROW Then
+        Call VBA.Err.Raise( _
+            ERROR_STATIC_DATA, METHOD_NAME, "Static_Data has no account mappings.")
+    End If
+
+    arrData = wksStatic.Range( _
+        wksStatic.Cells(STATIC_DATA_FIRST_DATA_ROW, 2), _
+        wksStatic.Cells(lngLastRow, 7)).Value2
+    Set dictAccounts = CreateObject("Scripting.Dictionary")
+    dictAccounts.CompareMode = vbTextCompare
+    Set dictFirstRows = CreateObject("Scripting.Dictionary")
+    dictFirstRows.CompareMode = vbTextCompare
+
+    Debug.Print "Dallas AUDIT | Static_Data duplicate Account check | starting"
+
+    For lngRow = 1 To UBound(arrData, 1)
+        If IsNumeric(arrData(lngRow, 1)) Then
+            strDisplayedIdentifier = CStr( _
+                wksStatic.Cells(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1, 2).Text)
+        ElseIf IsError(arrData(lngRow, 1)) Then
+            strDisplayedIdentifier = vbNullString
+        ElseIf IsNull(arrData(lngRow, 1)) Or IsEmpty(arrData(lngRow, 1)) Then
+            strDisplayedIdentifier = vbNullString
+        Else
+            strDisplayedIdentifier = Trim$(CStr(arrData(lngRow, 1)))
+        End If
+
+        strIdentifierContext = "Static_Data row " & _
+            CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & "."
+        strIdentifier = NormalizeAccountIdentifier( _
+            arrData(lngRow, 1), strDisplayedIdentifier, _
+            ERROR_STATIC_DATA, strIdentifierContext)
+
+        If Len(strIdentifier) > 0 Then
+            strFund = GetTextValue(arrData(lngRow, 2))
+            strMaster = GetOptionalMasterValue(arrData(lngRow, 3))
+            strTeam = GetTextValue(arrData(lngRow, 6))
+
+            If dictAccounts.Exists(strIdentifier) Then
+                arrPreviousMapping = dictAccounts(strIdentifier)
+                strConflictFields = vbNullString
+                If StrComp(CStr(arrPreviousMapping(0)), strFund, vbTextCompare) <> 0 Then
+                    strConflictFields = "C (Fund)"
+                End If
+                If StrComp(CStr(arrPreviousMapping(1)), strMaster, vbTextCompare) <> 0 Then
+                    If Len(strConflictFields) > 0 Then strConflictFields = strConflictFields & ", "
+                    strConflictFields = strConflictFields & "D (Master)"
+                End If
+                If StrComp(CStr(arrPreviousMapping(2)), strTeam, vbTextCompare) <> 0 Then
+                    If Len(strConflictFields) > 0 Then strConflictFields = strConflictFields & ", "
+                    strConflictFields = strConflictFields & "G (Team)"
+                End If
+                If Len(strConflictFields) > 0 Then
+                    lngConflictCount = lngConflictCount + 1
+                    Debug.Print "Dallas AUDIT | conflict rows " & _
+                        CStr(dictFirstRows(strIdentifier)) & " and " & _
+                        CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & _
+                        " | different columns: " & strConflictFields
+                End If
+            Else
+                dictAccounts.Add strIdentifier, Array(strFund, strMaster, strTeam)
+                dictFirstRows.Add strIdentifier, STATIC_DATA_FIRST_DATA_ROW + lngRow - 1
+            End If
+        End If
+    Next lngRow
+
+    Debug.Print "Dallas AUDIT | Static_Data conflicting duplicate rows | " & _
+        CStr(lngConflictCount)
+
+ExitPoint:
+    Set wksStatic = Nothing
+    Set dictFirstRows = Nothing
+    Set dictAccounts = Nothing
+    If errNumber <> 0 Then Call ErrorManager.display
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "row", lngRow)
+    GoTo ExitPoint
+End Sub
+
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-08-26
@@ -82,10 +199,12 @@ Public Function BuildAccountMappingDictionary() As Object
     Dim arrData As Variant
     Dim arrPreviousMapping As Variant
     Dim dictAccounts As Object
+    Dim dictFirstRows As Object
     Dim errDescription As String
     Dim errNumber As Long
     Dim lngLastRow As Long
     Dim lngRow As Long
+    Dim strConflictColumn As String
     Dim strDisplayedIdentifier As String
     Dim strFund As String
     Dim strIdentifier As String
@@ -110,6 +229,8 @@ Public Function BuildAccountMappingDictionary() As Object
         wksStatic.Cells(lngLastRow, 7)).Value2
     Set dictAccounts = CreateObject("Scripting.Dictionary")
     dictAccounts.CompareMode = vbTextCompare
+    Set dictFirstRows = CreateObject("Scripting.Dictionary")
+    dictFirstRows.CompareMode = vbTextCompare
 
     For lngRow = 1 To UBound(arrData, 1)
         If IsNumeric(arrData(lngRow, 1)) Then
@@ -135,24 +256,34 @@ Public Function BuildAccountMappingDictionary() As Object
             If dictAccounts.Exists(strIdentifier) Then
                 arrPreviousMapping = dictAccounts(strIdentifier)
 
-                If StrComp(CStr(arrPreviousMapping(0)), strFund, vbTextCompare) <> 0 Or _
-                    StrComp(CStr(arrPreviousMapping(1)), strMaster, vbTextCompare) <> 0 Or _
-                    StrComp(CStr(arrPreviousMapping(2)), strTeam, vbTextCompare) <> 0 Then
+                strConflictColumn = vbNullString
+                If StrComp(CStr(arrPreviousMapping(0)), strFund, vbTextCompare) <> 0 Then
+                    strConflictColumn = "C (Fund)"
+                ElseIf StrComp(CStr(arrPreviousMapping(1)), strMaster, vbTextCompare) <> 0 Then
+                    strConflictColumn = "D (Master)"
+                ElseIf StrComp(CStr(arrPreviousMapping(2)), strTeam, vbTextCompare) <> 0 Then
+                    strConflictColumn = "G (Team)"
+                End If
+
+                If Len(strConflictColumn) > 0 Then
                     Call VBA.Err.Raise( _
                         ERROR_STATIC_DATA, METHOD_NAME, _
-                        "Conflicting Static_Data mapping for a repeated Account " & _
-                        "at worksheet row " & _
+                        "Conflicting Static_Data Account mapping in " & _
+                        strConflictColumn & " between rows " & _
+                        CStr(dictFirstRows(strIdentifier)) & " and " & _
                         CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & ". " & _
-                        "Resolve the duplicate before running the macro.")
+                        "Review both rows before running the macro.")
                 End If
             Else
                 dictAccounts.Add strIdentifier, Array(strFund, strMaster, strTeam)
+                dictFirstRows.Add strIdentifier, STATIC_DATA_FIRST_DATA_ROW + lngRow - 1
             End If
         End If
     Next lngRow
 
 ExitPoint:
     Set wksStatic = Nothing
+    Set dictFirstRows = Nothing
     If errNumber = 0 Then Set BuildAccountMappingDictionary = dictAccounts
     Set dictAccounts = Nothing
     If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
