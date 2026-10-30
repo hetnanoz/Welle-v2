@@ -266,6 +266,7 @@ Private Sub EnsureImportantMessage(ByVal wksTransactions As Excel.Worksheet)
     Dim errNumber As Long
     Dim shpCandidate As Excel.Shape
     Dim shpImportant As Excel.Shape
+    Dim strImportantMessage As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
@@ -285,6 +286,8 @@ Private Sub EnsureImportantMessage(ByVal wksTransactions As Excel.Worksheet)
         shpImportant.Name = IMPORTANT_MESSAGE_SHAPE_NAME
     End If
 
+    strImportantMessage = GetOutputImportantMessage()
+
     With shpImportant
         .Left = 575
         .Top = 8
@@ -292,7 +295,7 @@ Private Sub EnsureImportantMessage(ByVal wksTransactions As Excel.Worksheet)
         .Height = 125
         .Placement = xlFreeFloating
         .Locked = True
-        .TextFrame.Characters.Text = COMBINED_IMPORTANT_MESSAGE
+        .TextFrame.Characters.Text = strImportantMessage
         .TextFrame.Characters.Font.Name = OUTPUT_HEADER_FONT_NAME
         .TextFrame.Characters.Font.Size = OUTPUT_HEADER_FONT_SIZE
         .TextFrame.Characters.Font.Bold = True
@@ -555,5 +558,4 @@ ErrHandler:
         CLASS_NAME, METHOD_NAME, errNumber, errDescription)
     GoTo ExitPoint
 End Sub
-
 
