@@ -133,6 +133,42 @@ End Sub
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-29
+' Parameters:    ---
+' Returns:       String
+' Description:   Reads the optional Excel IMPORTANT text from Mapping.
+'                Missing/blank value preserves the existing default message.
+'-------------------------------------------------------------------------------
+Public Function GetOutputImportantMessage() As String
+    Const METHOD_NAME As String = "GetOutputImportantMessage"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strMessage As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strMessage = ReadOptionalTextIfDefined(NAME_OUTPUT_IMPORTANT_MESSAGE)
+    If Len(strMessage) = 0 Then strMessage = COMBINED_IMPORTANT_MESSAGE
+
+ExitPoint:
+    If errNumber = 0 Then GetOutputImportantMessage = strMessage
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise( _
+            errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+        "configName", NAME_OUTPUT_IMPORTANT_MESSAGE)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
 ' Parameters:    strName - configured Mapping name
 ' Returns:       Boolean
 ' Description:   Checks whether a named setting exists. If it exists but does
