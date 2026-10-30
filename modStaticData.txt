@@ -76,7 +76,7 @@ End Sub
 ' Creation date: 2026-10-30
 ' Parameters:    ---
 ' Returns:       ---
-' Description:   Reports conflicting duplicate Accounts without changing data.
+' Description:   Reports duplicate Account mappings, including resolvable rules.
 '-------------------------------------------------------------------------------
 Public Sub DiagnoseStaticDataAccountConflicts()
     Const METHOD_NAME As String = "DiagnoseStaticDataAccountConflicts"
@@ -189,26 +189,30 @@ End Sub
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
-' Creation date: 2026-08-26
+' Creation date: 2026-10-30
 ' Parameters:    ---
-' Returns:       Object
-' Description:   Builds one Account to Fonds, Master, and Team dictionary.
+' Returns:       Object (Account -> Collection of candidate mapping rows)
+' Description:   Reads Account mappings with optional per-row extra match fields.
 '-------------------------------------------------------------------------------
 Public Function BuildAccountMappingDictionary() As Object
     Const METHOD_NAME As String = "BuildAccountMappingDictionary"
     Dim arrData As Variant
-    Dim arrPreviousMapping As Variant
+    Dim colCandidates As Collection
     Dim dictAccounts As Object
-    Dim dictFirstRows As Object
     Dim errDescription As String
     Dim errNumber As Long
+    Dim lngColName As Long
+    Dim lngColValue As Long
+    Dim lngExtraColumn As Long
+    Dim lngLastColumn As Long
     Dim lngLastRow As Long
     Dim lngRow As Long
-    Dim strConflictColumn As String
     Dim strDisplayedIdentifier As String
-    Dim strFund As String
+    Dim strExtraName As String
+    Dim strExtraValue As String
     Dim strIdentifier As String
     Dim strIdentifierContext As String
+    Dim strFund As String
     Dim strMaster As String
     Dim strTeam As String
     Dim wksStatic As Excel.Worksheet
@@ -217,24 +221,27 @@ Public Function BuildAccountMappingDictionary() As Object
 
     Set wksStatic = ThisWorkbook.Worksheets(SHEET_STATIC_DATA)
     lngLastRow = GetStaticDataLastRow(wksStatic)
-
     If lngLastRow < STATIC_DATA_FIRST_DATA_ROW Then
-        Call VBA.Err.Raise( _
-            ERROR_STATIC_DATA, METHOD_NAME, _
+        Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
             "Static_Data does not contain any account mappings.")
     End If
 
+    Call GetStaticDataExceptionColumns(wksStatic, lngColName, lngColValue)
+    lngLastColumn = 7
+    If lngColName > lngLastColumn Then lngLastColumn = lngColName
+    If lngColValue > lngLastColumn Then lngLastColumn = lngColValue
+
     arrData = wksStatic.Range( _
         wksStatic.Cells(STATIC_DATA_FIRST_DATA_ROW, 2), _
-        wksStatic.Cells(lngLastRow, 7)).Value2
+        wksStatic.Cells(lngLastRow, lngLastColumn)).Value2
+
     Set dictAccounts = CreateObject("Scripting.Dictionary")
     dictAccounts.CompareMode = vbTextCompare
-    Set dictFirstRows = CreateObject("Scripting.Dictionary")
-    dictFirstRows.CompareMode = vbTextCompare
 
     For lngRow = 1 To UBound(arrData, 1)
         If IsNumeric(arrData(lngRow, 1)) Then
-            strDisplayedIdentifier = CStr(wksStatic.Cells(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1, 2).Text)
+            strDisplayedIdentifier = CStr(wksStatic.Cells( _
+                STATIC_DATA_FIRST_DATA_ROW + lngRow - 1, 2).Text)
         ElseIf IsError(arrData(lngRow, 1)) Then
             strDisplayedIdentifier = vbNullString
         ElseIf IsNull(arrData(lngRow, 1)) Or IsEmpty(arrData(lngRow, 1)) Then
@@ -243,7 +250,8 @@ Public Function BuildAccountMappingDictionary() As Object
             strDisplayedIdentifier = Trim$(CStr(arrData(lngRow, 1)))
         End If
 
-        strIdentifierContext = "Static_Data row " & CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & "."
+        strIdentifierContext = "Static_Data row " & _
+            CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & "."
         strIdentifier = NormalizeAccountIdentifier( _
             arrData(lngRow, 1), strDisplayedIdentifier, _
             ERROR_STATIC_DATA, strIdentifierContext)
@@ -252,75 +260,87 @@ Public Function BuildAccountMappingDictionary() As Object
             strFund = GetTextValue(arrData(lngRow, 2))
             strMaster = GetOptionalMasterValue(arrData(lngRow, 3))
             strTeam = GetTextValue(arrData(lngRow, 6))
+            lngExtraColumn = 0
+            strExtraName = vbNullString
+            strExtraValue = vbNullString
+
+            If lngColName > 0 Then
+                strExtraName = GetTextValue(arrData(lngRow, lngColName - 1))
+                strExtraValue = GetTextValue(arrData(lngRow, lngColValue - 1))
+                If (Len(strExtraName) = 0) <> (Len(strExtraValue) = 0) Then
+                    Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
+                        "Both Exception Extra Column and Exception Extra Value " & _
+                        "must be filled at " & strIdentifierContext)
+                End If
+                If Len(strExtraName) > 0 Then
+                    lngExtraColumn = ResolveExceptionTransactionColumn(strExtraName)
+                    If lngExtraColumn = 0 Then
+                        Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
+                            "Unknown or unsupported Exception Extra Column at " & _
+                            strIdentifierContext & " Use an input header or F:U letter.")
+                    End If
+                End If
+            End If
 
             If dictAccounts.Exists(strIdentifier) Then
-                arrPreviousMapping = dictAccounts(strIdentifier)
-
-                strConflictColumn = vbNullString
-                If StrComp(CStr(arrPreviousMapping(0)), strFund, vbTextCompare) <> 0 Then
-                    strConflictColumn = "C (Fund)"
-                ElseIf StrComp(CStr(arrPreviousMapping(1)), strMaster, vbTextCompare) <> 0 Then
-                    strConflictColumn = "D (Master)"
-                ElseIf StrComp(CStr(arrPreviousMapping(2)), strTeam, vbTextCompare) <> 0 Then
-                    strConflictColumn = "G (Team)"
-                End If
-
-                If Len(strConflictColumn) > 0 Then
-                    Call VBA.Err.Raise( _
-                        ERROR_STATIC_DATA, METHOD_NAME, _
-                        "Conflicting Static_Data Account mapping in " & _
-                        strConflictColumn & " between rows " & _
-                        CStr(dictFirstRows(strIdentifier)) & " and " & _
-                        CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & ". " & _
-                        "Review both rows before running the macro.")
-                End If
+                Set colCandidates = dictAccounts(strIdentifier)
             Else
-                dictAccounts.Add strIdentifier, Array(strFund, strMaster, strTeam)
-                dictFirstRows.Add strIdentifier, STATIC_DATA_FIRST_DATA_ROW + lngRow - 1
+                Set colCandidates = New Collection
+                dictAccounts.Add strIdentifier, colCandidates
             End If
+
+            ' Candidate: Fund, Master, Team, transaction column, match value, Static row.
+            colCandidates.Add Array( _
+                strFund, strMaster, strTeam, lngExtraColumn, strExtraValue, _
+                STATIC_DATA_FIRST_DATA_ROW + lngRow - 1)
         End If
     Next lngRow
 
+    Debug.Print "Dallas PERF | Static_Data Account groups | " & CStr(dictAccounts.Count)
+
 ExitPoint:
+    Set colCandidates = Nothing
     Set wksStatic = Nothing
-    Set dictFirstRows = Nothing
     If errNumber = 0 Then Set BuildAccountMappingDictionary = dictAccounts
     Set dictAccounts = Nothing
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Function
 
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
-    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription, "row", lngRow)
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, "row", lngRow)
     GoTo ExitPoint
 End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
-' Creation date: 2026-08-26
+' Creation date: 2026-10-30
 ' Parameters:    arrCombined As Variant; dictAccounts As Object
 ' Returns:       ---
-' Description:   Calculates MF, Master, VD, TD, and Team in memory.
+' Description:   Applies exact exception matching and quarantines ambiguity.
 '-------------------------------------------------------------------------------
 Public Sub EnrichTransactions(ByRef arrCombined As Variant, ByVal dictAccounts As Object)
     Const METHOD_NAME As String = "EnrichTransactions"
     Dim arrMapping As Variant
+    Dim colCandidates As Collection
     Dim dtAddedTimestamp As Date
     Dim errDescription As String
     Dim errNumber As Long
+    Dim lngExceptionMatched As Long
     Dim lngRow As Long
+    Dim lngUnknown As Long
     Dim strAccount As String
-    Dim strFund As String
-    Dim strMaster As String
-    Dim strTeam As String
+    Dim strResultKind As String
     Dim strUserId As String
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
     If dictAccounts Is Nothing Then
-        Call VBA.Err.Raise( _
-            ERROR_STATIC_DATA, METHOD_NAME, _
+        Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
             "Account mapping dictionary is not available.")
     End If
 
@@ -329,43 +349,321 @@ Public Sub EnrichTransactions(ByRef arrCombined As Variant, ByVal dictAccounts A
 
     For lngRow = 2 To UBound(arrCombined, 1)
         strAccount = NormalizeLookupKey(arrCombined(lngRow, 6))
+        strResultKind = "UNKNOWN"
+        arrMapping = Array("UNKNOWN FUND", "UNKNOWN FUND", "UNKNOWN TEAM")
 
         If Len(strAccount) > 0 And dictAccounts.Exists(strAccount) Then
-            arrMapping = dictAccounts(strAccount)
-            strFund = Trim$(CStr(arrMapping(0)))
-            strMaster = Trim$(CStr(arrMapping(1)))
-            strTeam = Trim$(CStr(arrMapping(2)))
-
-            If Len(strFund) = 0 Then strFund = "UNKNOWN FUND"
-            If Len(strTeam) = 0 Then strTeam = "UNKNOWN TEAM"
-
-            arrCombined(lngRow, 1) = strFund
-            arrCombined(lngRow, 2) = strMaster
-            arrCombined(lngRow, 5) = strTeam
-        Else
-            arrCombined(lngRow, 1) = "UNKNOWN FUND"
-            arrCombined(lngRow, 2) = "UNKNOWN FUND"
-            arrCombined(lngRow, 5) = "UNKNOWN TEAM"
+            Set colCandidates = dictAccounts(strAccount)
+            arrMapping = ResolveAccountCandidateMapping( _
+                colCandidates, arrCombined, lngRow, strResultKind)
         End If
 
+        If strResultKind = "EXCEPTION" Then lngExceptionMatched = lngExceptionMatched + 1
+        If strResultKind = "UNKNOWN" Then lngUnknown = lngUnknown + 1
+
+        arrCombined(lngRow, 1) = arrMapping(0)
+        arrCombined(lngRow, 2) = arrMapping(1)
+        arrCombined(lngRow, 5) = arrMapping(2)
         arrCombined(lngRow, 3) = arrCombined(lngRow, 8)
         arrCombined(lngRow, 4) = arrCombined(lngRow, 9)
         arrCombined(lngRow, OUTPUT_TIMESTAMP_COLUMN) = dtAddedTimestamp
         arrCombined(lngRow, OUTPUT_USER_ID_COLUMN) = strUserId
     Next lngRow
 
+    Debug.Print "Dallas PERF | Static_Data exception matches | " & _
+        CStr(lngExceptionMatched)
+    Debug.Print "Dallas PERF | Static_Data unresolved transactions | " & _
+        CStr(lngUnknown)
+
 ExitPoint:
-    If errNumber <> 0 Then Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    Set colCandidates = Nothing
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
     Exit Sub
 
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
     Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "row", lngRow)
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, "row", lngRow)
     GoTo ExitPoint
 End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-30
+' Parameters:    colCandidates, arrCombined, lngRow, strResultKind
+' Returns:       Variant (Fund, Master, Team)
+' Description:   Exception wins; conflicting unmatched Accounts become UNKNOWN.
+'-------------------------------------------------------------------------------
+Private Function ResolveAccountCandidateMapping( _
+    ByVal colCandidates As Collection, _
+    ByRef arrCombined As Variant, _
+    ByVal lngRow As Long, _
+    ByRef strResultKind As String) As Variant
+
+    Const METHOD_NAME As String = "ResolveAccountCandidateMapping"
+    Dim arrCandidate As Variant
+    Dim arrFirst As Variant
+    Dim arrResolved As Variant
+    Dim blnConflict As Boolean
+    Dim blnMatchFound As Boolean
+    Dim blnMatchConflict As Boolean
+    Dim blnDefaultFound As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngMatchColumn As Long
+    Dim strTransactionValue As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    arrResolved = Array("UNKNOWN FUND", "UNKNOWN FUND", "UNKNOWN TEAM")
+    strResultKind = "UNKNOWN"
+    arrFirst = colCandidates(1)
+
+    ' Determine whether Account alone maps to competing Fund/Master/Team values.
+    For Each arrCandidate In colCandidates
+        If Not CandidateMappingsEqual(arrFirst, arrCandidate) Then
+            blnConflict = True
+        End If
+    Next arrCandidate
+
+    ' The more-specific matching exception is considered first.
+    For Each arrCandidate In colCandidates
+        lngMatchColumn = CLng(arrCandidate(3))
+        If lngMatchColumn > 0 Then
+            strTransactionValue = GetTransactionExceptionValue( _
+                arrCombined(lngRow, lngMatchColumn))
+            If StrComp(strTransactionValue, CStr(arrCandidate(4)), vbTextCompare) = 0 Then
+                If blnMatchFound Then
+                    If Not CandidateMappingsEqual(arrResolved, arrCandidate) Then
+                        blnMatchConflict = True
+                    End If
+                Else
+                    arrResolved = Array(arrCandidate(0), arrCandidate(1), arrCandidate(2))
+                    blnMatchFound = True
+                End If
+            End If
+        End If
+    Next arrCandidate
+
+    If blnMatchFound Then
+        If blnMatchConflict Then
+            arrResolved = Array("UNKNOWN FUND", "UNKNOWN FUND", "UNKNOWN TEAM")
+        Else
+            strResultKind = "EXCEPTION"
+        End If
+    ElseIf Not blnConflict Then
+        ' Only an unconditional row can serve as a default mapping.
+        For Each arrCandidate In colCandidates
+            If CLng(arrCandidate(3)) = 0 Then
+                arrResolved = Array(arrCandidate(0), arrCandidate(1), arrCandidate(2))
+                blnDefaultFound = True
+                Exit For
+            End If
+        Next arrCandidate
+        If blnDefaultFound Then strResultKind = "DEFAULT"
+    End If
+
+    If strResultKind <> "UNKNOWN" Then
+        If Len(Trim$(CStr(arrResolved(0)))) = 0 Then arrResolved(0) = "UNKNOWN FUND"
+        If Len(Trim$(CStr(arrResolved(2)))) = 0 Then arrResolved(2) = "UNKNOWN TEAM"
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then ResolveAccountCandidateMapping = arrResolved
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError( _
+        CLASS_NAME, METHOD_NAME, errNumber, errDescription, "row", lngRow)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-30
+' Parameters:    arrA, arrB As Variant
+' Returns:       Boolean
+' Description:   Compares candidate mappings (first three elements only).
+'-------------------------------------------------------------------------------
+Private Function CandidateMappingsEqual(ByVal arrA As Variant, ByVal arrB As Variant) As Boolean
+    Const METHOD_NAME As String = "CandidateMappingsEqual"
+    Dim blnEqual As Boolean
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    blnEqual = _
+        StrComp(CStr(arrA(0)), CStr(arrB(0)), vbTextCompare) = 0 And _
+        StrComp(CStr(arrA(1)), CStr(arrB(1)), vbTextCompare) = 0 And _
+        StrComp(CStr(arrA(2)), CStr(arrB(2)), vbTextCompare) = 0
+
+ExitPoint:
+    If errNumber = 0 Then CandidateMappingsEqual = blnEqual
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-30
+' Parameters:    varValue As Variant
+' Returns:       String
+' Description:   Converts input value to trimmed comparison text.
+'-------------------------------------------------------------------------------
+Private Function GetTransactionExceptionValue(ByVal varValue As Variant) As String
+    Const METHOD_NAME As String = "GetTransactionExceptionValue"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim strResult As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    If IsError(varValue) Then
+        strResult = vbNullString
+    ElseIf IsNull(varValue) Or IsEmpty(varValue) Then
+        strResult = vbNullString
+    Else
+        strResult = Trim$(CStr(varValue))
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then GetTransactionExceptionValue = strResult
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-30
+' Parameters:    wksStatic, lngColName, lngColValue
+' Returns:       ---
+' Description:   Finds optional exception headers beyond existing column G.
+'-------------------------------------------------------------------------------
+Private Sub GetStaticDataExceptionColumns( _
+    ByVal wksStatic As Excel.Worksheet, _
+    ByRef lngColName As Long, _
+    ByRef lngColValue As Long)
+
+    Const METHOD_NAME As String = "GetStaticDataExceptionColumns"
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColumn As Long
+    Dim lngLastHeaderColumn As Long
+    Dim strHeader As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    lngLastHeaderColumn = wksStatic.Cells(1, wksStatic.Columns.Count).End(xlToLeft).Column
+    For lngColumn = 8 To lngLastHeaderColumn
+        strHeader = GetTextValue(wksStatic.Cells(1, lngColumn).Value2)
+        Select Case UCase$(strHeader)
+            Case "EXCEPTION EXTRA COLUMN"
+                If lngColName <> 0 Then
+                    Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
+                        "Duplicate Exception Extra Column header in Static_Data.")
+                End If
+                lngColName = lngColumn
+            Case "EXCEPTION EXTRA VALUE"
+                If lngColValue <> 0 Then
+                    Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
+                        "Duplicate Exception Extra Value header in Static_Data.")
+                End If
+                lngColValue = lngColumn
+        End Select
+    Next lngColumn
+
+    If (lngColName = 0) <> (lngColValue = 0) Then
+        Call VBA.Err.Raise(ERROR_STATIC_DATA, METHOD_NAME, _
+            "Both Exception Extra Column and Exception Extra Value " & _
+            "headers are required in Static_Data.")
+    End If
+
+ExitPoint:
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Sub
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Sub
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-30
+' Parameters:    strColumnName As String
+' Returns:       Long (F:U, input transaction columns)
+' Description:   Resolves either an output header name or Excel column letter.
+'-------------------------------------------------------------------------------
+Private Function ResolveExceptionTransactionColumn(ByVal strColumnName As String) As Long
+    Const METHOD_NAME As String = "ResolveExceptionTransactionColumn"
+    Dim arrHeaders As Variant
+    Dim errDescription As String
+    Dim errNumber As Long
+    Dim lngColumn As Long
+    Dim lngFound As Long
+    Dim strKey As String
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    strKey = UCase$(Trim$(strColumnName))
+    arrHeaders = GetOutputHeaders()
+
+    For lngColumn = 6 To INPUT_COLUMN_COUNT + 5
+        If StrComp(strKey, CStr(arrHeaders(lngColumn - 1)), vbTextCompare) = 0 Then
+            lngFound = lngColumn
+            Exit For
+        End If
+    Next lngColumn
+
+    If lngFound = 0 And Len(strKey) = 1 Then
+        lngColumn = Asc(strKey) - Asc("A") + 1
+        If lngColumn >= 6 And lngColumn <= INPUT_COLUMN_COUNT + 5 Then
+            lngFound = lngColumn
+        End If
+    End If
+
+ExitPoint:
+    If errNumber = 0 Then ResolveExceptionTransactionColumn = lngFound
+    If errNumber <> 0 Then
+        Call VBA.Err.Raise(errNumber, CLASS_NAME & "." & METHOD_NAME, errDescription)
+    End If
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+    Call ErrorManager.addError(CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    GoTo ExitPoint
+End Function
 
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
