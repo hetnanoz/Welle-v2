@@ -311,9 +311,30 @@ Public Function BuildOpenFundTeamDictionary( _
         strTeam = Trim$(CStr(arrData(lngRow, 15)))
 
         If StrComp(strStatus, "Open", vbTextCompare) = 0 Then
-            If Len(strFundNumber) > 0 Then dictTeams(strFundNumber) = strTeam
+            If Len(strFundNumber) > 0 Then
+                If dictTeams.Exists(strFundNumber) Then
+                    If StrComp( _
+                        CStr(dictTeams(strFundNumber)), strTeam, _
+                        vbTextCompare) <> 0 Then
+                        Call VBA.Err.Raise( _
+                            ERROR_FONDSLISTE, METHOD_NAME, _
+                            "Conflicting Team assignment for an Open fund " & _
+                            "in Fondsliste at worksheet row " & _
+                            CStr(FONDSLISTE_FIRST_DATA_ROW + lngRow - 1) & ".")
+                    End If
+                Else
+                    dictTeams.Add strFundNumber, strTeam
+                End If
+            End If
         End If
     Next lngRow
+
+    If dictTeams.Count = 0 Then
+        Call VBA.Err.Raise( _
+            ERROR_FONDSLISTE, METHOD_NAME, _
+            "No Open funds found in Fondsliste. Static_Data was not modified.")
+    End If
+
     Debug.Print "Dallas PERF | Fondsliste dictionary build (" & _
         CStr(dictTeams.Count) & " open funds) | " & _
         CStr(DateDiff("s", dtStepStarted, Now)) & " s"
@@ -415,9 +436,11 @@ ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
     lngCopyErrNumber = errNumber
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "operation", "optional local Fondsliste copy")
+    ' Local staging is an optional speed optimization. A failed attempt
+    ' must not pollute the shared ErrorManager when direct read-only fallback works.
+    ' The caller prints the error code in the Immediate window.
+    Debug.Print "Dallas PERF | Optional Fondsliste staging error | " & _
+        CStr(errNumber)
     GoTo ExitPoint
 End Function
 
