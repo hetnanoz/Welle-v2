@@ -220,6 +220,17 @@ ExitPoint:
     Set colTeams = Nothing
     Set colAttachmentPaths = Nothing
 
+    ' Remove only the run-specific workspace, including on handled errors.
+    ' The caller retains any original business error for BAT display.
+    If Len(strStageWorkspace) > 0 Then
+        cleanupErrNumber = DeleteDiagnosticWorkspaceSafely( _
+            strStageWorkspace, errNumber = 0)
+        If errNumber = 0 And cleanupErrNumber <> 0 Then
+            errNumber = cleanupErrNumber
+            errDescription = "The temporary run workspace could not be deleted."
+        End If
+    End If
+
     If blnStateCaptured Then
         enableEventsCleanupErrNumber = RestoreEnableEventsSafely( _
             blnPreviousEnableEvents, errNumber = 0)
@@ -339,7 +350,8 @@ ExitPoint:
     Set dictFundTeams = Nothing
 
     If Len(strStageWorkspace) > 0 Then
-        cleanupErrNumber = DeleteDiagnosticWorkspaceSafely(strStageWorkspace)
+        cleanupErrNumber = DeleteDiagnosticWorkspaceSafely( _
+            strStageWorkspace, errNumber = 0)
         If errNumber = 0 And cleanupErrNumber <> 0 Then
             errNumber = cleanupErrNumber
             errDescription = "Temporary Fondsliste test workspace could not be deleted."
@@ -388,11 +400,13 @@ End Sub
 '-------------------------------------------------------------------------------
 ' Author:        Pawel Ligezka
 ' Creation date: 2026-10-29
-' Parameters:    strWorkspace As String
+' Parameters:    Workspace folder and whether cleanup errors may be logged.
 ' Returns:       Long (0 = successful cleanup)
 ' Description:   Cleans temporary diagnostics folder without masking errors.
 '-------------------------------------------------------------------------------
-Private Function DeleteDiagnosticWorkspaceSafely(ByVal strWorkspace As String) As Long
+Private Function DeleteDiagnosticWorkspaceSafely( _
+    ByVal strWorkspace As String, _
+    ByVal blnLogCleanupError As Boolean) As Long
     Const METHOD_NAME As String = "DeleteDiagnosticWorkspaceSafely"
     Dim errDescription As String
     Dim errNumber As Long
@@ -413,9 +427,11 @@ ExitPoint:
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
-    Call ErrorManager.addError( _
-        CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-        "workspace", strWorkspace)
+    If blnLogCleanupError Then
+        Call ErrorManager.addError( _
+            CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
+            "workspace", strWorkspace)
+    End If
     GoTo ExitPoint
 End Function
 
@@ -748,22 +764,35 @@ Private Function RestoreApplicationStateSafely( _
     Const METHOD_NAME As String = "RestoreApplicationStateSafely"
     Dim errDescription As String
     Dim errNumber As Long
-    Dim strCleanupStage As String
+    Dim lngStepErrNumber As Long
 
     If Not DEV_MODE Then On Error GoTo ErrHandler
 
-    strCleanupStage = "restore Application.StatusBar"
-    Application.StatusBar = varPreviousStatusBar
-    strCleanupStage = "restore Application.AutomationSecurity"
-    Application.AutomationSecurity = lngPreviousAutomationSecurity
-    strCleanupStage = "restore Application.Calculation"
-    Application.Calculation = xlPreviousCalculation
-    strCleanupStage = "restore Application.AskToUpdateLinks"
-    Application.AskToUpdateLinks = blnPreviousAskToUpdateLinks
-    strCleanupStage = "restore Application.DisplayAlerts"
-    Application.DisplayAlerts = blnPreviousDisplayAlerts
-    strCleanupStage = "restore Application.ScreenUpdating"
-    Application.ScreenUpdating = blnPreviousScreenUpdating
+    ' Each setting is restored independently. One failure must not prevent
+    ' restoration of the remaining global Excel settings.
+    lngStepErrNumber = RestoreExcelPropertySafely( _
+        "StatusBar", varPreviousStatusBar, blnLogCleanupError)
+    If errNumber = 0 Then errNumber = lngStepErrNumber
+
+    lngStepErrNumber = RestoreExcelPropertySafely( _
+        "AutomationSecurity", lngPreviousAutomationSecurity, blnLogCleanupError)
+    If errNumber = 0 Then errNumber = lngStepErrNumber
+
+    lngStepErrNumber = RestoreExcelPropertySafely( _
+        "Calculation", xlPreviousCalculation, blnLogCleanupError)
+    If errNumber = 0 Then errNumber = lngStepErrNumber
+
+    lngStepErrNumber = RestoreExcelPropertySafely( _
+        "AskToUpdateLinks", blnPreviousAskToUpdateLinks, blnLogCleanupError)
+    If errNumber = 0 Then errNumber = lngStepErrNumber
+
+    lngStepErrNumber = RestoreExcelPropertySafely( _
+        "DisplayAlerts", blnPreviousDisplayAlerts, blnLogCleanupError)
+    If errNumber = 0 Then errNumber = lngStepErrNumber
+
+    lngStepErrNumber = RestoreExcelPropertySafely( _
+        "ScreenUpdating", blnPreviousScreenUpdating, blnLogCleanupError)
+    If errNumber = 0 Then errNumber = lngStepErrNumber
 
 ExitPoint:
     RestoreApplicationStateSafely = errNumber
@@ -772,18 +801,64 @@ ExitPoint:
 ErrHandler:
     errNumber = VBA.Err.Number
     errDescription = VBA.Err.Description
-    errDescription = _
-        "Cleanup stage: " & strCleanupStage & ". Error " & _
-        CStr(errNumber) & ": " & errDescription
+    If blnLogCleanupError Then
+        Call ErrorManager.addError( _
+            CLASS_NAME, METHOD_NAME, errNumber, errDescription)
+    End If
+    GoTo ExitPoint
+End Function
+
+'-------------------------------------------------------------------------------
+' Author:        Pawel Ligezka
+' Creation date: 2026-10-29
+' Parameters:    Excel property name, previous value and logging preference.
+' Returns:       Long (0 when restoration succeeded)
+' Description:   Isolates an Excel state restoration error from other settings.
+'-------------------------------------------------------------------------------
+Private Function RestoreExcelPropertySafely( _
+    ByVal strProperty As String, _
+    ByVal varPreviousValue As Variant, _
+    ByVal blnLogCleanupError As Boolean) As Long
+
+    Const METHOD_NAME As String = "RestoreExcelPropertySafely"
+    Dim errDescription As String
+    Dim errNumber As Long
+
+    If Not DEV_MODE Then On Error GoTo ErrHandler
+
+    Select Case strProperty
+        Case "StatusBar"
+            Application.StatusBar = varPreviousValue
+        Case "AutomationSecurity"
+            Application.AutomationSecurity = CLng(varPreviousValue)
+        Case "Calculation"
+            Application.Calculation = CLng(varPreviousValue)
+        Case "AskToUpdateLinks"
+            Application.AskToUpdateLinks = CBool(varPreviousValue)
+        Case "DisplayAlerts"
+            Application.DisplayAlerts = CBool(varPreviousValue)
+        Case "ScreenUpdating"
+            Application.ScreenUpdating = CBool(varPreviousValue)
+        Case Else
+            Call VBA.Err.Raise( _
+                ERROR_CONFIGURATION, METHOD_NAME, _
+                "Unknown Excel setting for restoration: " & strProperty)
+    End Select
+
+ExitPoint:
+    RestoreExcelPropertySafely = errNumber
+    Exit Function
+
+ErrHandler:
+    errNumber = VBA.Err.Number
+    errDescription = VBA.Err.Description
+
+    ' A primary error must remain the error displayed by the MASTER.
     If blnLogCleanupError Then
         Call ErrorManager.addError( _
             CLASS_NAME, METHOD_NAME, errNumber, errDescription, _
-            "cleanupStage", strCleanupStage)
+            "setting", strProperty)
     End If
-
-    ' Cleanup helper: return the cleanup error rather than re-raising it.
-    ' When a primary MASTER error already exists, do not add a newer cleanup
-    ' error to ErrorManager because that could hide the primary user-facing error.
     GoTo ExitPoint
 End Function
 
