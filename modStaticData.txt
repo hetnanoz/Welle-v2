@@ -80,6 +80,7 @@ End Sub
 Public Function BuildAccountMappingDictionary() As Object
     Const METHOD_NAME As String = "BuildAccountMappingDictionary"
     Dim arrData As Variant
+    Dim arrPreviousMapping As Variant
     Dim dictAccounts As Object
     Dim errDescription As String
     Dim errNumber As Long
@@ -130,7 +131,23 @@ Public Function BuildAccountMappingDictionary() As Object
             strFund = GetTextValue(arrData(lngRow, 2))
             strMaster = GetOptionalMasterValue(arrData(lngRow, 3))
             strTeam = GetTextValue(arrData(lngRow, 6))
-            dictAccounts(strIdentifier) = Array(strFund, strMaster, strTeam)
+
+            If dictAccounts.Exists(strIdentifier) Then
+                arrPreviousMapping = dictAccounts(strIdentifier)
+
+                If StrComp(CStr(arrPreviousMapping(0)), strFund, vbTextCompare) <> 0 Or _
+                    StrComp(CStr(arrPreviousMapping(1)), strMaster, vbTextCompare) <> 0 Or _
+                    StrComp(CStr(arrPreviousMapping(2)), strTeam, vbTextCompare) <> 0 Then
+                    Call VBA.Err.Raise( _
+                        ERROR_STATIC_DATA, METHOD_NAME, _
+                        "Conflicting Static_Data mapping for a repeated Account " & _
+                        "at worksheet row " & _
+                        CStr(STATIC_DATA_FIRST_DATA_ROW + lngRow - 1) & ". " & _
+                        "Resolve the duplicate before running the macro.")
+                End If
+            Else
+                dictAccounts.Add strIdentifier, Array(strFund, strMaster, strTeam)
+            End If
         End If
     Next lngRow
 
